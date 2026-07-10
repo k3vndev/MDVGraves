@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.2 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.4 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -68,4 +68,7 @@ messages:
   grave-empty-removed: '&7La bolsa vacía se ha desvanecido.'
   reload: '&aMDVGraves recargado.'
   cleanup: '&aLimpieza ejecutada. Bolsas expiradas eliminadas: &e{count}&a.'
+  delete-all-confirm: '&cEsto eliminará definitivamente las &e{count} &cbolsas y todo su contenido. Usa &e/mdvgraves deleteall confirm &cpara confirmar.'
+  delete-all-done: '&aSe eliminaron definitivamente &e{count} &abolsas.'
+  delete-all-error: '&cNo se pudieron eliminar todas las bolsas. Revisa la consola.'
   no-permission: '&cNo tienes permiso.'

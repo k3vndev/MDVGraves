@@ -1,0 +1,20 @@
+MDVGraves 1.0.4 - Borrado global administrativo
+
+Nuevo comando:
+  /mdvgraves deleteall confirm
+
+Aliases:
+  /mdvgraves purge confirm
+  /mdvgraves eliminartodas confirmar
+
+Comportamiento:
+- Requiere mdvgraves.admin.
+- Sin confirm/confirmar solo muestra una advertencia con la cantidad de bolsas.
+- Cierra primero cualquier inventario de bolsa abierto.
+- Elimina todos los registros con una sola operación SQLite.
+- Elimina inmediatamente las cabezas de chunks cargados.
+- No fuerza la carga de chunks descargados.
+- Las cabezas huérfanas de chunks descargados se eliminan mediante ChunkLoadEvent cuando vuelvan a cargar.
+- No dropea los objetos: el borrado es definitivo.
+
+También se corrigió el workflow de GitHub para subir cualquier target/MDVGraves-*.jar y no quedar atado a una versión vieja.

@@ -1,4 +1,4 @@
-# MDVGraves 1.0.2
+# MDVGraves 1.0.3
 
 Plugin ligero de bolsas de muerte para Purpur/Paper 1.21.6 y Java 21.
 
@@ -27,7 +27,7 @@ mvn clean package
 El jar queda en:
 
 ```text
-target/MDVGraves-1.0.2.jar
+target/MDVGraves-1.0.3.jar
 ```
 
 También se incluye `.github/workflows/build.yml` para compilarlo mediante GitHub Actions.
@@ -80,3 +80,12 @@ Las bolsas son una excepción deliberada a las protecciones de construcción:
 - Cualquier jugador puede romperla y soltar su contenido, aunque no tenga permiso de construcción en la región.
 - La región continúa protegiendo cofres, puertas y bloques normales.
 - `softdepend` garantiza que MDVGraves procese la excepción después de WorldGuard/ProtectionStones.
+
+
+## Borrado administrativo global
+
+```text
+/mdvgraves deleteall confirm
+```
+
+Elimina definitivamente todas las bolsas y su contenido. No carga chunks a la fuerza; las cabezas que estén en chunks descargados se limpian cuando esos chunks vuelvan a cargar.

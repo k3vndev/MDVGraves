@@ -19,6 +19,7 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -62,7 +63,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         scheduleCleanup();
-        getLogger().info("MDVGraves 1.0.2 activo. Bolsas cargadas: " + graves.size());
+        getLogger().info("MDVGraves 1.0.4 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
@@ -178,6 +179,9 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInteract(PlayerInteractEvent event) {
+        // Bukkit dispara PlayerInteractEvent una vez por cada mano. Solo procesamos la principal
+        // para evitar abrir la misma bolsa y enviar mensajes dos veces.
+        if (event.getHand() != EquipmentSlot.HAND) return;
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) return;
         UUID id = graveId(event.getClickedBlock());
         if (id == null) return;
@@ -607,7 +611,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.2 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.4 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {
@@ -621,7 +625,53 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             send(sender, "messages.cleanup", Map.of("count", Integer.toString(count)));
             return true;
         }
+        if (args[0].equalsIgnoreCase("deleteall") || args[0].equalsIgnoreCase("purge")
+                || args[0].equalsIgnoreCase("eliminartodas")) {
+            if (args.length < 2 || !(args[1].equalsIgnoreCase("confirm") || args[1].equalsIgnoreCase("confirmar"))) {
+                send(sender, "messages.delete-all-confirm", Map.of("count", Integer.toString(graves.size())));
+                return true;
+            }
+            try {
+                int count = deleteAllGraves();
+                send(sender, "messages.delete-all-done", Map.of("count", Integer.toString(count)));
+            } catch (Exception ex) {
+                getLogger().log(Level.SEVERE, "No se pudieron eliminar todas las bolsas.", ex);
+                send(sender, "messages.delete-all-error", Map.of());
+            }
+            return true;
+        }
         return false;
+    }
+
+    private int deleteAllGraves() throws SQLException {
+        // Cierra primero cualquier bolsa abierta. InventoryCloseEvent persiste su estado
+        // antes del borrado global, evitando carreras o inventarios visuales obsoletos.
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder) {
+                player.closeInventory();
+            }
+        }
+
+        List<GraveMeta> snapshot = new ArrayList<>(graves.values());
+        int deleted;
+        // Una sola operación SQLite: más barata que borrar tumba por tumba.
+        try (Statement st = connection.createStatement()) {
+            deleted = st.executeUpdate("DELETE FROM graves");
+        }
+
+        graves.clear();
+        gravesByBlock.clear();
+        activeViewers.clear();
+
+        // Solo toca bloques en chunks ya cargados. Los chunks descargados no se fuerzan;
+        // sus cabezas huérfanas serán retiradas por ChunkLoadEvent cuando vuelvan a cargar.
+        for (GraveMeta meta : snapshot) {
+            World world = Bukkit.getWorld(meta.world());
+            if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) continue;
+            Block block = world.getBlockAt(meta.x(), meta.y(), meta.z());
+            if (isOurHead(block, meta.id())) block.setType(Material.AIR, false);
+        }
+        return deleted;
     }
 
     private record BlockKey(String world, int x, int y, int z) { }
