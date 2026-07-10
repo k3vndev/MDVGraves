@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.1 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.2 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -21,7 +21,9 @@ settings:
   placement-search-radius: 2
 
   remove-when-empty: true
-  protect-from-explosions: true
+  # true: una explosión que alcance la bolsa la rompe y suelta su contenido normal.
+  # false: las bolsas son inmunes a explosiones.
+  explosions-break-graves: true
   protect-from-pistons: true
   protect-from-fluids: true
 

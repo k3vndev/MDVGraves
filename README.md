@@ -1,4 +1,4 @@
-# MDVGraves 1.0.1
+# MDVGraves 1.0.2
 
 Plugin ligero de bolsas de muerte para Purpur/Paper 1.21.6 y Java 21.
 
@@ -27,7 +27,7 @@ mvn clean package
 El jar queda en:
 
 ```text
-target/MDVGraves-1.0.1.jar
+target/MDVGraves-1.0.2.jar
 ```
 
 También se incluye `.github/workflows/build.yml` para compilarlo mediante GitHub Actions.

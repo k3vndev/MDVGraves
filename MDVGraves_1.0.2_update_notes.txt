@@ -1,0 +1,9 @@
+MDVGraves 1.0.2
+
+- Corrige la compilación en Paper/Purpur 1.21.6 evitando mezclar org.bukkit.profile.PlayerProfile con com.destroystokyo.paper.profile.PlayerProfile.
+- Las texturas Base64 se convierten a la URL de textures.minecraft.net mediante la API Bukkit PlayerTextures.
+- Las explosiones ahora pueden romper bolsas y soltar una sola vez todos sus objetos persistidos.
+- Nueva opción: settings.explosions-break-graves: true.
+- Si se configura false, las bolsas vuelven a ser inmunes a explosiones.
+- Pistones y fluidos continúan protegidos para impedir movimiento o desaparición accidental.
+- Se corrige el nombre final del JAR a MDVGraves-1.0.2.jar.

@@ -1,6 +1,5 @@
 package xyz.mdvcraft.mdvgraves;
 
-import com.destroystokyo.paper.profile.ProfileProperty;
 import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
@@ -24,12 +23,15 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.profile.PlayerProfile;
+import org.bukkit.profile.PlayerTextures;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.io.BukkitObjectInputStream;
 import org.bukkit.util.io.BukkitObjectOutputStream;
 
 import java.io.*;
 import java.sql.*;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,7 +62,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         scheduleCleanup();
-        getLogger().info("MDVGraves 1.0.1 activo. Bolsas cargadas: " + graves.size());
+        getLogger().info("MDVGraves 1.0.2 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
@@ -264,13 +266,14 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             Player viewer = Bukkit.getPlayer(viewerId);
             if (viewer != null && viewer.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder holder
                     && holder.graveId().equals(id)) {
-                viewer.closeInventory(); // cierre guarda el estado actual antes de cargar para dropear
+                // InventoryCloseEvent guarda primero el contenido actual. Después se carga esa versión para dropearla.
+                viewer.closeInventory();
             }
         }
         try {
             List<ItemStack> items = getConfig().getBoolean("settings.break-drops-items", true) ? loadItems(id) : List.of();
             removeGrave(id, true, items);
-            send(breaker, "messages.grave-broken", Map.of("owner", meta.ownerName()));
+            if (breaker != null) send(breaker, "messages.grave-broken", Map.of("owner", meta.ownerName()));
         } catch (Exception ex) {
             getLogger().log(Level.SEVERE, "No se pudo romper correctamente la bolsa " + id, ex);
         }
@@ -278,14 +281,31 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onExplosion(EntityExplodeEvent event) {
-        if (!getConfig().getBoolean("settings.protect-from-explosions", true)) return;
-        event.blockList().removeIf(block -> graveId(block) != null);
+        breakGravesFromExplosion(event.blockList());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onBlockExplosion(BlockExplodeEvent event) {
-        if (!getConfig().getBoolean("settings.protect-from-explosions", true)) return;
-        event.blockList().removeIf(block -> graveId(block) != null);
+        breakGravesFromExplosion(event.blockList());
+    }
+
+    private void breakGravesFromExplosion(List<Block> affectedBlocks) {
+        if (!getConfig().getBoolean("settings.explosions-break-graves", true)) {
+            // Modo antiguo opcional: la explosión no destruye bolsas.
+            affectedBlocks.removeIf(block -> graveId(block) != null);
+            return;
+        }
+
+        Set<UUID> graveIds = new LinkedHashSet<>();
+        affectedBlocks.removeIf(block -> {
+            UUID id = graveId(block);
+            if (id == null) return false;
+            graveIds.add(id);
+            // Se quita de la lista vanilla: MDVGraves hace una única eliminación transaccional
+            // y suelta exactamente el inventario persistido, no una cabeza adicional.
+            return true;
+        });
+        for (UUID id : graveIds) breakGrave(null, id);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -454,14 +474,43 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private void applyTexture(Skull skull, Player owner) {
         String texture = selectTexture(owner);
-        PlayerProfile profile = Bukkit.createPlayerProfile(UUID.randomUUID(), "MDVGrave");
+        PlayerProfile profile;
         if (texture != null && !texture.isBlank()) {
-            profile.setProperty(new ProfileProperty("textures", texture.trim()));
+            profile = Bukkit.createPlayerProfile(UUID.randomUUID(), "MDVGrave");
+            String skinUrl = extractTextureUrl(texture.trim());
+            if (skinUrl != null) {
+                try {
+                    PlayerTextures textures = profile.getTextures();
+                    textures.setSkin(URI.create(skinUrl).toURL());
+                    profile.setTextures(textures);
+                } catch (Exception ex) {
+                    getLogger().log(Level.WARNING, "Textura Base64 inválida; se usará la cabeza del jugador.", ex);
+                    profile = owner.getPlayerProfile().clone();
+                }
+            } else {
+                getLogger().warning("No se encontró una URL textures.minecraft.net en la textura Base64; se usará la cabeza del jugador.");
+                profile = owner.getPlayerProfile().clone();
+            }
         } else {
-            PlayerProfile ownerProfile = owner.getPlayerProfile();
-            profile = ownerProfile.clone();
+            profile = owner.getPlayerProfile().clone();
         }
-        skull.setPlayerProfile(profile);
+        // API Bukkit compatible con Paper/Purpur 1.21.6; evita mezclar los dos PlayerProfile de Paper.
+        skull.setOwnerProfile(profile);
+    }
+
+    private String extractTextureUrl(String base64Texture) {
+        try {
+            String json = new String(Base64.getDecoder().decode(base64Texture), StandardCharsets.UTF_8);
+            int key = json.indexOf("\"url\"");
+            if (key < 0) return null;
+            int colon = json.indexOf(':', key);
+            int firstQuote = json.indexOf('\"', colon + 1);
+            int secondQuote = json.indexOf('\"', firstQuote + 1);
+            if (colon < 0 || firstQuote < 0 || secondQuote < 0) return null;
+            return json.substring(firstQuote + 1, secondQuote).replace("\\/", "/");
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private String selectTexture(Player player) {
@@ -558,7 +607,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.1 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.2 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {
