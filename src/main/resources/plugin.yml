@@ -1,0 +1,19 @@
+name: MDVGraves
+version: 1.0.0
+main: xyz.mdvcraft.mdvgraves.MDVGravesPlugin
+api-version: '1.21'
+author: MDVCRAFT
+description: Bolsas de muerte persistentes y ligeras para MDVCRAFT.
+softdepend: [MMOItems, MythicLib]
+commands:
+  mdvgraves:
+    description: Administración de MDVGraves.
+    usage: /mdvgraves <reload|cleanup|info>
+    permission: mdvgraves.admin
+permissions:
+  mdvgraves.admin:
+    default: op
+  mdvgraves.texture.vip:
+    default: false
+  mdvgraves.texture.admin:
+    default: op

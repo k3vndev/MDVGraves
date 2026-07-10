@@ -1,0 +1,16 @@
+MDVGraves 1.0.0 - Primera versión
+
+- Plugin independiente para bolsas de muerte.
+- Solo habilitado en `world` por defecto.
+- Usa PLAYER_HEAD real con PDC; no usa armor stands ni hologramas.
+- Guarda únicamente los items presentes en PlayerDeathEvent#getDrops().
+- Cualquier jugador puede abrir y retirar objetos.
+- Cualquier jugador puede romper la bolsa; los objetos restantes se dropean.
+- Bloqueo de un solo visor para evitar duplicaciones.
+- Persistencia SQLite en graves.db con WAL y blobs GZIP.
+- Sin abrir: 168 horas. Tras primera apertura: 20 minutos.
+- Limpieza cada 300 segundos, sin tareas por tick y sin forzar chunks.
+- Texturas Base64 configurables por permisos/rangos.
+- Protección contra explosiones y pistones.
+- Si falla colocación o SQLite, conserva drops vanilla.
+- Comandos administrativos: info, reload y cleanup.

@@ -1,0 +1,65 @@
+# ==========================================================
+# MDVGraves 1.0.0 - Bolsas de muerte ligeras para MDVCRAFT
+# ==========================================================
+settings:
+  enabled: true
+
+  # Solo en estos mundos se crean bolsas. En los demás, muerte vanilla normal.
+  enabled-worlds:
+    - world
+
+  # 7 días mientras nadie la haya abierto.
+  unopened-expire-hours: 168
+
+  # Desde la primera apertura, quedan 20 minutos.
+  opened-expire-minutes: 20
+
+  # Una consulta SQLite por intervalo. No revisa tumbas por tick.
+  cleanup-interval-seconds: 300
+
+  # Si no puede colocar una cabeza de forma segura, deja los drops vanilla.
+  placement-search-radius: 2
+
+  remove-when-empty: true
+  protect-from-explosions: true
+  protect-from-pistons: true
+
+  # Cualquier jugador puede abrir o romper cualquier bolsa.
+  only-owner-can-open: false
+
+  # Al romperla, su contenido cae una sola vez como drops normales.
+  break-drops-items: true
+
+  # Evita dos inventarios simultáneos sobre la misma bolsa.
+  single-viewer-lock: true
+
+inventory:
+  title: '&8Bolsa perdida de &e{owner}'
+  # Debe ser múltiplo de 9, entre 9 y 54. Si hay más objetos, se ajusta hasta 54.
+  minimum-size: 27
+
+textures:
+  # Se evalúan de arriba hacia abajo. La primera permission que cumpla gana.
+  ranks:
+    admin:
+      permission: 'mdvgraves.texture.admin'
+      texture: ''
+    vip:
+      permission: 'mdvgraves.texture.vip'
+      texture: ''
+
+  # Base64 completo de textures.minecraft.net. Vacío = cabeza de jugador normal.
+  default: ''
+
+messages:
+  prefix: '&6&l[&5&lMDVCRAFT&6&l]&4> &r'
+  grave-created: '&eTus pertenencias quedaron guardadas en una bolsa. &7X:&f{x} &7Y:&f{y} &7Z:&f{z}'
+  grave-opened: '&eHas abierto la bolsa perdida de &f{owner}&e.'
+  grave-busy: '&cOtra persona está revisando esta bolsa.'
+  not-owner: '&cEsta bolsa no te pertenece.'
+  grave-expired-owner: '&7Una de tus bolsas perdidas se ha desvanecido.'
+  grave-broken: '&eLa bolsa se rompió y sus pertenencias cayeron al suelo.'
+  grave-empty-removed: '&7La bolsa vacía se ha desvanecido.'
+  reload: '&aMDVGraves recargado.'
+  cleanup: '&aLimpieza ejecutada. Bolsas expiradas eliminadas: &e{count}&a.'
+  no-permission: '&cNo tienes permiso.'
