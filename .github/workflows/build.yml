@@ -3,33 +3,23 @@ name: Build MDVGraves
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - master
+    branches: [ main, master ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
-
-      - name: Configurar Java 21
-        uses: actions/setup-java@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
-
-      - name: Compilar
+      - name: Compile
         run: mvn clean package
-
-      - name: Mostrar archivos generados
+      - name: Show generated files
         run: ls -lah target
-
-      - name: Subir JAR
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: MDVGraves
           path: target/MDVGraves-*.jar
