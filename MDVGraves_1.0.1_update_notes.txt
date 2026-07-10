@@ -1,0 +1,11 @@
+MDVGraves 1.0.1 - Compatibilidad PvP con WorldGuard y ProtectionStones
+
+Cambios:
+- WorldGuard y ProtectionStones se agregan como softdepend para asegurar el orden de listeners.
+- Las bolsas siguen pudiendo abrirse y romperse aunque una región cancele interactuar o romper bloques.
+- Esto solo afecta a bloques registrados como bolsas de MDVGraves; puertas, cofres y bloques normales siguen protegidos.
+- Nueva protección contra flujo de agua/lava hacia una bolsa (`settings.protect-from-fluids`).
+- Se mantiene protección contra explosiones y pistones.
+- La colocación de la bolsa es interna y no depende del permiso build de la región.
+
+No requiere borrar graves.db ni la carpeta del plugin.

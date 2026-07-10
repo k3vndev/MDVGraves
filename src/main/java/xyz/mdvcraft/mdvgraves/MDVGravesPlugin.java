@@ -60,7 +60,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         scheduleCleanup();
-        getLogger().info("MDVGraves 1.0.0 activo. Bolsas cargadas: " + graves.size());
+        getLogger().info("MDVGraves 1.0.1 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
@@ -286,6 +286,15 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     public void onBlockExplosion(BlockExplodeEvent event) {
         if (!getConfig().getBoolean("settings.protect-from-explosions", true)) return;
         event.blockList().removeIf(block -> graveId(block) != null);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFluidFlow(BlockFromToEvent event) {
+        // Evita que agua o lava desplacen/alteren una bolsa. No afecta otros bloques.
+        if (getConfig().getBoolean("settings.protect-from-fluids", true)
+                && graveId(event.getToBlock()) != null) {
+            event.setCancelled(true);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -549,7 +558,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.0 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.1 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {

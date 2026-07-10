@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.0 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.1 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -23,6 +23,10 @@ settings:
   remove-when-empty: true
   protect-from-explosions: true
   protect-from-pistons: true
+  protect-from-fluids: true
+
+  # Las bolsas son una excepción intencional a las protecciones de región:
+  # cualquier jugador puede abrirlas y romperlas para conservar el loot PvP.
 
   # Cualquier jugador puede abrir o romper cualquier bolsa.
   only-owner-can-open: false

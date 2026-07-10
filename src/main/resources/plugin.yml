@@ -1,10 +1,10 @@
 name: MDVGraves
-version: 1.0.0
+version: 1.0.1
 main: xyz.mdvcraft.mdvgraves.MDVGravesPlugin
 api-version: '1.21'
 author: MDVCRAFT
 description: Bolsas de muerte persistentes y ligeras para MDVCRAFT.
-softdepend: [MMOItems, MythicLib]
+softdepend: [MMOItems, MythicLib, WorldGuard, ProtectionStones]
 commands:
   mdvgraves:
     description: Administración de MDVGraves.
