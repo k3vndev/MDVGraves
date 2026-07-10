@@ -1,0 +1,10 @@
+MDVGraves 1.0.5 - Colocación de bolsas sobre el suelo
+
+Cambios:
+- La bolsa ya no se coloca en el aire en la altura exacta de muerte.
+- Se busca hacia abajo en la columna de muerte hasta encontrar el primer bloque sólido.
+- La PLAYER_HEAD se coloca justo encima de ese bloque.
+- Si esa columna no ofrece una posición válida, se buscan columnas cercanas según settings.placement-search-radius.
+- Si no existe ninguna superficie válida, se conservan los drops vanilla para evitar pérdida de objetos.
+
+No requiere cambios obligatorios en config.yml ni en graves.db.

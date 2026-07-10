@@ -3,7 +3,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>xyz.mdvcraft</groupId>
   <artifactId>MDVGraves</artifactId>
-  <version>1.0.4</version>
+  <version>1.0.5</version>
   <packaging>jar</packaging>
 
   <properties>
@@ -33,7 +33,7 @@
   </dependencies>
 
   <build>
-    <finalName>MDVGraves-1.0.4</finalName>
+    <finalName>MDVGraves-1.0.5</finalName>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

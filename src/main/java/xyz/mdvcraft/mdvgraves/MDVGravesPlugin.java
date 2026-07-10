@@ -63,7 +63,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         scheduleCleanup();
-        getLogger().info("MDVGraves 1.0.4 activo. Bolsas cargadas: " + graves.size());
+        getLogger().info("MDVGraves 1.0.5 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
@@ -532,19 +532,38 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private Block findPlacementBlock(Location death) {
         int radius = Math.max(0, getConfig().getInt("settings.placement-search-radius", 2));
         World world = death.getWorld();
-        int baseX = death.getBlockX(), baseY = Math.max(world.getMinHeight(), Math.min(world.getMaxHeight() - 1, death.getBlockY())), baseZ = death.getBlockZ();
-        for (int dy : new int[]{0, 1, -1, 2, -2}) {
-            for (int r = 0; r <= radius; r++) {
-                for (int dx = -r; dx <= r; dx++) {
-                    for (int dz = -r; dz <= r; dz++) {
-                        if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r) continue;
-                        int y = baseY + dy;
-                        if (y < world.getMinHeight() || y >= world.getMaxHeight()) continue;
-                        Block block = world.getBlockAt(baseX + dx, y, baseZ + dz);
-                        if (canReplace(block)) return block;
-                    }
+        int baseX = death.getBlockX();
+        int baseZ = death.getBlockZ();
+        int startY = Math.max(world.getMinHeight() + 1,
+                Math.min(world.getMaxHeight() - 1, death.getBlockY()));
+
+        // Primero revisa exactamente la columna donde murió el jugador. Si no existe
+        // una superficie utilizable, amplía la búsqueda por anillos cercanos.
+        for (int r = 0; r <= radius; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r) continue;
+                    Block target = findFirstSurfaceAbove(world, baseX + dx, startY, baseZ + dz);
+                    if (target != null) return target;
                 }
             }
+        }
+        return null;
+    }
+
+    /**
+     * Busca hacia abajo desde la altura de muerte y devuelve el bloque reemplazable
+     * inmediatamente superior al primer bloque sólido encontrado. Esto evita bolsas
+     * flotando cuando el jugador muere en caída, vuelo o sobre un precipicio.
+     */
+    private Block findFirstSurfaceAbove(World world, int x, int startY, int z) {
+        int minY = world.getMinHeight();
+        for (int y = startY; y > minY; y--) {
+            Block support = world.getBlockAt(x, y - 1, z);
+            if (canReplace(support)) continue;
+
+            Block target = world.getBlockAt(x, y, z);
+            return canReplace(target) ? target : null;
         }
         return null;
     }
@@ -611,7 +630,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.4 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.5 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {
