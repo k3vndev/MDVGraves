@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.5 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.6 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -39,6 +39,35 @@ settings:
   # Evita dos inventarios simultáneos sobre la misma bolsa.
   single-viewer-lock: true
 
+# ==========================================================
+# UTILIDADES POR PERMISO
+# ==========================================================
+utilities:
+  back-grave:
+    enabled: true
+
+    # Permite también usar /back grave sin reemplazar el /back de Essentials.
+    intercept-back-grave: true
+
+    # 0 desactiva el cooldown.
+    cooldown-seconds: 30
+
+    # Busca un punto seguro alrededor de la última bolsa.
+    safe-search-radius: 3
+
+    # Vacío = sin sonido.
+    sound: 'entity.enderman.teleport'
+
+  private-graves:
+    enabled: true
+
+    # Las bolsas creadas por jugadores con mdvgraves.private
+    # tampoco se rompen mediante explosiones.
+    protect-from-explosions: true
+
+  keep-inventory:
+    enabled: true
+
 inventory:
   title: '&8Bolsa perdida de &e{owner}'
   # Debe ser múltiplo de 9, entre 9 y 54. Si hay más objetos, se ajusta hasta 54.
@@ -72,3 +101,13 @@ messages:
   delete-all-done: '&aSe eliminaron definitivamente &e{count} &abolsas.'
   delete-all-error: '&cNo se pudieron eliminar todas las bolsas. Revisa la consola.'
   no-permission: '&cNo tienes permiso.'
+  players-only: '&cEste comando solo puede usarlo un jugador.'
+  grave-private: '&cLa bolsa de &f{owner} &cestá protegida y no puedes abrirla ni romperla.'
+  keep-inventory: '&aHas conservado tu inventario y no se creó ninguna bolsa.'
+  back-disabled: '&cEl regreso a bolsas está desactivado.'
+  back-no-graves: '&cNo tienes ninguna bolsa activa a la que regresar.'
+  back-cooldown: '&cDebes esperar &e{seconds} segundos &cpara volver a usar este comando.'
+  back-world-unavailable: '&cEl mundo &e{world} &cno está disponible.'
+  back-no-safe-location: '&cNo se encontró un lugar seguro cerca de tu bolsa en &e{world} &7({x}, {y}, {z})&c.'
+  back-teleport-failed: '&cNo fue posible teletransportarte a tu bolsa.'
+  back-teleported: '&aHas regresado a tu última bolsa. &7{world} &f({x}, {y}, {z})'

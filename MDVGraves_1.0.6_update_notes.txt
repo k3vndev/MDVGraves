@@ -1,0 +1,46 @@
+MDVGraves 1.0.6 - Utilidades por permiso
+=========================================
+
+NUEVO
+-----
+1. Regreso a la última bolsa activa:
+   - /graveback
+   - /backgrave
+   - /bolsaback
+   - /mdvgraves back
+   - /back grave
+   Permiso: mdvgraves.back
+
+2. Bolsas privadas:
+   - Permiso: mdvgraves.private
+   - Las nuevas bolsas creadas con el permiso quedan protegidas en SQLite.
+   - Solo propietario y mdvgraves.admin pueden abrirlas o romperlas.
+   - Pueden ser inmunes a explosiones mediante config.
+
+3. Keep inventory:
+   - Permiso: mdvgraves.keepinventory
+   - Conserva todos los objetos al morir.
+   - No crea bolsa.
+   - No cambia la pérdida de experiencia.
+
+4. Migración automática:
+   - Añade graves.owner_protected con default 0.
+   - No borra ni recrea graves.db.
+   - Las bolsas antiguas quedan públicas.
+
+MIGRACIÓN
+---------
+1. Apaga el servidor.
+2. Haz backup de plugins/MDVGraves/graves.db y config.yml.
+3. Reemplaza únicamente el JAR.
+4. NO borres plugins/MDVGraves.
+5. Agrega el bloque utilities y los mensajes incluidos en MDVGraves-1.0.6-CONFIG-UPDATE.yml.
+6. Inicia el servidor.
+
+PERMISOS
+--------
+mdvgraves.back
+mdvgraves.back.cooldown.bypass
+mdvgraves.private
+mdvgraves.keepinventory
+mdvgraves.admin

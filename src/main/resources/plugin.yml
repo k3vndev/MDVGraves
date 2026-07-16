@@ -1,5 +1,5 @@
 name: MDVGraves
-version: 1.0.5
+version: 1.0.6
 main: xyz.mdvcraft.mdvgraves.MDVGravesPlugin
 api-version: '1.21'
 author: MDVCRAFT
@@ -7,12 +7,23 @@ description: Bolsas de muerte persistentes y ligeras para MDVCRAFT.
 softdepend: [MMOItems, MythicLib, WorldGuard, ProtectionStones]
 commands:
   mdvgraves:
-    description: Administración de MDVGraves.
-    usage: /mdvgraves <reload|cleanup|info|deleteall confirm>
-    permission: mdvgraves.admin
+    description: Administración y utilidades de MDVGraves.
+    usage: /mdvgraves <back|reload|cleanup|info|deleteall confirm>
+  graveback:
+    description: Teletransporta a la última bolsa activa del jugador.
+    usage: /graveback
+    aliases: [backgrave, bolsaback]
 permissions:
   mdvgraves.admin:
     default: op
+  mdvgraves.back:
+    default: false
+  mdvgraves.back.cooldown.bypass:
+    default: op
+  mdvgraves.private:
+    default: false
+  mdvgraves.keepinventory:
+    default: false
   mdvgraves.texture.vip:
     default: false
   mdvgraves.texture.admin:
