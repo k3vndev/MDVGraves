@@ -8,6 +8,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityChangeBlockEvent;
+import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -43,12 +45,34 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public final class MDVGravesPlugin extends JavaPlugin implements Listener {
+    private static final Set<String> THIN_REPLACEABLE_MATERIALS = Set.of(
+            "SNOW", "SHORT_GRASS", "TALL_GRASS", "FERN", "LARGE_FERN", "DEAD_BUSH",
+            "VINE", "CAVE_VINES", "CAVE_VINES_PLANT", "WEEPING_VINES",
+            "WEEPING_VINES_PLANT", "TWISTING_VINES", "TWISTING_VINES_PLANT",
+            "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT", "GLOW_LICHEN",
+            "HANGING_ROOTS", "NETHER_SPROUTS", "CRIMSON_ROOTS", "WARPED_ROOTS",
+            "WHEAT", "CARROTS", "POTATOES", "BEETROOTS", "NETHER_WART", "COCOA",
+            "MELON_STEM", "PUMPKIN_STEM", "ATTACHED_MELON_STEM",
+            "ATTACHED_PUMPKIN_STEM", "SWEET_BERRY_BUSH", "TORCHFLOWER_CROP",
+            "PITCHER_CROP", "BAMBOO_SAPLING", "LILY_PAD", "PINK_PETALS",
+            "WILDFLOWERS", "LEAF_LITTER", "BUSH", "FIREFLY_BUSH", "SHORT_DRY_GRASS",
+            "TALL_DRY_GRASS", "PALE_HANGING_MOSS", "PALE_MOSS_CARPET",
+            "MOSS_CARPET", "SCULK_VEIN", "COBWEB", "DANDELION", "POPPY",
+            "BLUE_ORCHID", "ALLIUM", "AZURE_BLUET", "OXEYE_DAISY", "CORNFLOWER",
+            "LILY_OF_THE_VALLEY", "WITHER_ROSE", "TORCHFLOWER", "OPEN_EYEBLOSSOM",
+            "CLOSED_EYEBLOSSOM", "SPORE_BLOSSOM", "SMALL_DRIPLEAF"
+    );
     private NamespacedKey graveKey;
     private Connection connection;
     private final Map<UUID, GraveMeta> graves = new ConcurrentHashMap<>();
     private final Map<BlockKey, UUID> gravesByBlock = new ConcurrentHashMap<>();
-    private final Map<UUID, UUID> activeViewers = new HashMap<>();
+    // Cada bolsa abierta utiliza un único inventario canónico compartido. Incluso si
+    // single-viewer-lock se desactiva, nunca se crean dos copias visuales del mismo loot.
+    private final Map<UUID, Set<UUID>> activeViewers = new HashMap<>();
+    private final Map<UUID, Inventory> openGraveInventories = new HashMap<>();
+    private final Set<UUID> forcedClosingGraves = new HashSet<>();
     private BukkitTask cleanupTask;
+    private BukkitTask integrityTask;
     private final Map<UUID, Long> graveBackCooldowns = new ConcurrentHashMap<>();
 
     @Override
@@ -66,19 +90,22 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         getServer().getPluginManager().registerEvents(this, this);
         scheduleCleanup();
-        getLogger().info("MDVGraves 1.0.6 activo. Bolsas cargadas: " + graves.size());
+        scheduleOpenGraveIntegrityGuard();
+        getLogger().info("MDVGraves 1.0.7 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
     public void onDisable() {
         if (cleanupTask != null) cleanupTask.cancel();
-        // Guarda inventarios que todavía estén abiertos antes del cierre.
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder holder) {
-                saveInventoryAndMaybeRemove(holder.graveId(), player.getOpenInventory().getTopInventory(), false);
-            }
+        if (integrityTask != null) integrityTask.cancel();
+        // Cada bolsa abierta posee un único inventario canónico. Se persiste una sola vez,
+        // aunque más de un jugador la estuviera observando.
+        for (Map.Entry<UUID, Inventory> entry : new ArrayList<>(openGraveInventories.entrySet())) {
+            saveInventoryAndMaybeRemove(entry.getKey(), entry.getValue(), false);
         }
         activeViewers.clear();
+        openGraveInventories.clear();
+        forcedClosingGraves.clear();
         try {
             if (connection != null && !connection.isClosed()) connection.close();
         } catch (SQLException ignored) { }
@@ -204,7 +231,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         // para evitar abrir la misma bolsa y enviar mensajes dos veces.
         if (event.getHand() != EquipmentSlot.HAND) return;
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) return;
-        UUID id = graveId(event.getClickedBlock());
+        UUID id = physicalGraveId(event.getClickedBlock());
         if (id == null) return;
         event.setCancelled(true);
 
@@ -219,28 +246,38 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                     Map.of("owner", meta.ownerName()));
             return;
         }
-        UUID viewer = activeViewers.get(id);
-        if (getConfig().getBoolean("settings.single-viewer-lock", true) && viewer != null && !viewer.equals(player.getUniqueId())) {
+        pruneInactiveViewers(id);
+        Set<UUID> viewers = activeViewers.computeIfAbsent(id, ignored -> new LinkedHashSet<>());
+        if (getConfig().getBoolean("settings.single-viewer-lock", true)
+                && viewers.stream().anyMatch(viewer -> !viewer.equals(player.getUniqueId()))) {
             send(player, "messages.grave-busy", Map.of("owner", meta.ownerName()));
             return;
         }
 
         try {
-            List<ItemStack> items = loadItems(id);
-            int size = inventorySize(items.size());
-            String title = color(getConfig().getString("inventory.title", "&8Bolsa perdida de &e{owner}"))
-                    .replace("{owner}", meta.ownerName());
-            GraveHolder holder = new GraveHolder(id);
-            Inventory inventory = Bukkit.createInventory(holder, size, title);
-            holder.inventory = inventory;
-            for (ItemStack item : items) inventory.addItem(item.clone());
+            Inventory inventory = openGraveInventories.get(id);
+            if (inventory == null) {
+                List<ItemStack> items = loadItems(id);
+                int size = inventorySize(items.size());
+                String title = color(getConfig().getString("inventory.title", "&8Bolsa perdida de &e{owner}"))
+                        .replace("{owner}", meta.ownerName());
+                GraveHolder holder = new GraveHolder(id);
+                inventory = Bukkit.createInventory(holder, size, title);
+                holder.inventory = inventory;
+                for (ItemStack item : items) inventory.addItem(item.clone());
+                openGraveInventories.put(id, inventory);
+            }
 
-            activeViewers.put(id, player.getUniqueId());
+            viewers.add(player.getUniqueId());
             markFirstOpened(meta);
             player.openInventory(inventory);
             send(player, "messages.grave-opened", Map.of("owner", meta.ownerName()));
         } catch (Exception ex) {
-            activeViewers.remove(id);
+            viewers.remove(player.getUniqueId());
+            if (viewers.isEmpty()) {
+                activeViewers.remove(id);
+                openGraveInventories.remove(id);
+            }
             getLogger().log(Level.SEVERE, "No se pudo abrir la bolsa " + id, ex);
         }
     }
@@ -249,8 +286,32 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     public void onInventoryClose(InventoryCloseEvent event) {
         if (!(event.getInventory().getHolder() instanceof GraveHolder holder)) return;
         UUID id = holder.graveId();
-        activeViewers.remove(id, event.getPlayer().getUniqueId());
+        GraveMeta meta = graves.get(id);
+        Block physicalBlock = loadedGraveBlock(meta);
+        boolean physicalMissing = physicalBlock != null && !isOurHead(physicalBlock, id);
+
+        Set<UUID> viewers = activeViewers.get(id);
+        if (viewers != null) {
+            viewers.remove(event.getPlayer().getUniqueId());
+            if (viewers.isEmpty()) activeViewers.remove(id);
+        }
+
+        // Los cierres forzados persisten el inventario exactamente una vez desde
+        // closeAllViewersAndPersist(), no una vez por cada espectador.
+        if (forcedClosingGraves.contains(id)) return;
+        if (isBeingViewed(id)) {
+            if (physicalMissing) verifyOpenGraveNextTick(id);
+            return;
+        }
+
+        openGraveInventories.remove(id);
         saveInventoryAndMaybeRemove(id, event.getInventory(), true);
+
+        // Cubre el caso extremo en que otro plugin cambió el bloque y el último visor
+        // cerró la GUI antes de que alcanzara a ejecutarse el guardián periódico.
+        if (physicalMissing && physicalBlock != null && graves.containsKey(id)) {
+            restoreGraveHead(physicalBlock, meta);
+        }
     }
 
     private void saveInventoryAndMaybeRemove(UUID id, Inventory inventory, boolean notify) {
@@ -275,13 +336,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBreak(BlockBreakEvent event) {
-        UUID id = graveId(event.getBlock());
+        UUID id = trackedGraveId(event.getBlock());
         if (id == null) return;
         event.setCancelled(true);
         event.setDropItems(false);
 
         GraveMeta meta = graves.get(id);
         if (meta == null) return;
+        if (isBeingViewed(id)) {
+            send(event.getPlayer(), "messages.grave-in-use-break", Map.of("owner", meta.ownerName()));
+            verifyOpenGraveNextTick(id);
+            return;
+        }
         if (!canAccessGrave(event.getPlayer(), meta)) {
             send(event.getPlayer(), meta.ownerProtected() ? "messages.grave-private" : "messages.not-owner",
                     Map.of("owner", meta.ownerName()));
@@ -293,14 +359,11 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private void breakGrave(Player breaker, UUID id) {
         GraveMeta meta = graves.get(id);
         if (meta == null) return;
-        UUID viewerId = activeViewers.get(id);
-        if (viewerId != null) {
-            Player viewer = Bukkit.getPlayer(viewerId);
-            if (viewer != null && viewer.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder holder
-                    && holder.graveId().equals(id)) {
-                // InventoryCloseEvent guarda primero el contenido actual. Después se carga esa versión para dropearla.
-                viewer.closeInventory();
-            }
+        // Regla anti-duplicación: una bolsa abierta nunca entra en la ruta de borrado/drop.
+        if (isBeingViewed(id)) {
+            if (breaker != null) send(breaker, "messages.grave-in-use-break", Map.of("owner", meta.ownerName()));
+            verifyOpenGraveNextTick(id);
+            return;
         }
         try {
             List<ItemStack> items = getConfig().getBoolean("settings.break-drops-items", true) ? loadItems(id) : List.of();
@@ -324,14 +387,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private void breakGravesFromExplosion(List<Block> affectedBlocks) {
         if (!getConfig().getBoolean("settings.explosions-break-graves", true)) {
             // Modo antiguo opcional: la explosión no destruye bolsas.
-            affectedBlocks.removeIf(block -> graveId(block) != null);
+            affectedBlocks.removeIf(block -> trackedGraveId(block) != null);
             return;
         }
 
         Set<UUID> graveIds = new LinkedHashSet<>();
         affectedBlocks.removeIf(block -> {
-            UUID id = graveId(block);
+            UUID id = trackedGraveId(block);
             if (id == null) return false;
+            if (isBeingViewed(id)) {
+                verifyOpenGraveNextTick(id);
+                return true;
+            }
             GraveMeta meta = graves.get(id);
             if (meta != null && meta.ownerProtected()
                     && getConfig().getBoolean("utilities.private-graves.protect-from-explosions", true)) {
@@ -348,22 +415,66 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onFluidFlow(BlockFromToEvent event) {
         // Evita que agua o lava desplacen/alteren una bolsa. No afecta otros bloques.
-        if (getConfig().getBoolean("settings.protect-from-fluids", true)
-                && graveId(event.getToBlock()) != null) {
+        UUID id = trackedGraveId(event.getToBlock());
+        if (id != null && (isBeingViewed(id) || getConfig().getBoolean("settings.protect-from-fluids", true))) {
             event.setCancelled(true);
+            if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPistonExtend(BlockPistonExtendEvent event) {
-        if (getConfig().getBoolean("settings.protect-from-pistons", true)
-                && event.getBlocks().stream().anyMatch(block -> graveId(block) != null)) event.setCancelled(true);
+        UUID openId = event.getBlocks().stream().map(this::trackedGraveId)
+                .filter(Objects::nonNull).filter(this::isBeingViewed).findFirst().orElse(null);
+        boolean containsGrave = event.getBlocks().stream().anyMatch(block -> trackedGraveId(block) != null);
+        if (openId != null || (getConfig().getBoolean("settings.protect-from-pistons", true) && containsGrave)) {
+            event.setCancelled(true);
+            if (openId != null) verifyOpenGraveNextTick(openId);
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPistonRetract(BlockPistonRetractEvent event) {
-        if (getConfig().getBoolean("settings.protect-from-pistons", true)
-                && event.getBlocks().stream().anyMatch(block -> graveId(block) != null)) event.setCancelled(true);
+        UUID openId = event.getBlocks().stream().map(this::trackedGraveId)
+                .filter(Objects::nonNull).filter(this::isBeingViewed).findFirst().orElse(null);
+        boolean containsGrave = event.getBlocks().stream().anyMatch(block -> trackedGraveId(block) != null);
+        if (openId != null || (getConfig().getBoolean("settings.protect-from-pistons", true) && containsGrave)) {
+            event.setCancelled(true);
+            if (openId != null) verifyOpenGraveNextTick(openId);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onBurn(BlockBurnEvent event) {
+        protectTrackedGraveBlock(event.getBlock(), event);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onFade(BlockFadeEvent event) {
+        protectTrackedGraveBlock(event.getBlock(), event);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onPhysics(BlockPhysicsEvent event) {
+        UUID id = trackedGraveId(event.getBlock());
+        if (id == null) return;
+        event.setCancelled(true);
+        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEntityChangeBlock(EntityChangeBlockEvent event) {
+        UUID id = trackedGraveId(event.getBlock());
+        if (id == null) return;
+        event.setCancelled(true);
+        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+    }
+
+    private void protectTrackedGraveBlock(Block block, Cancellable event) {
+        UUID id = trackedGraveId(block);
+        if (id == null) return;
+        event.setCancelled(true);
+        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
     }
 
     @EventHandler
@@ -382,6 +493,102 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    private void scheduleOpenGraveIntegrityGuard() {
+        if (integrityTask != null) integrityTask.cancel();
+        long ticks = Math.max(1L, getConfig().getLong("settings.open-grave-integrity-check-ticks", 2L));
+        integrityTask = Bukkit.getScheduler().runTaskTimer(this, this::verifyAllOpenGraves, ticks, ticks);
+    }
+
+    private void verifyAllOpenGraves() {
+        for (UUID id : new ArrayList<>(activeViewers.keySet())) {
+            pruneInactiveViewers(id);
+            if (!isBeingViewed(id)) continue;
+            verifyOpenGraveIntegrity(id);
+        }
+    }
+
+    private void verifyOpenGraveNextTick(UUID id) {
+        Bukkit.getScheduler().runTask(this, () -> verifyOpenGraveIntegrity(id));
+    }
+
+    private void verifyOpenGraveIntegrity(UUID id) {
+        if (!isBeingViewed(id)) return;
+        GraveMeta meta = graves.get(id);
+        if (meta == null) {
+            closeAllViewersAndPersist(id, false);
+            return;
+        }
+        World world = Bukkit.getWorld(meta.world());
+        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) return;
+        Block block = world.getBlockAt(meta.x(), meta.y(), meta.z());
+        if (isOurHead(block, id)) return;
+
+        getLogger().warning("La bolsa " + id + " fue alterada mientras estaba abierta. "
+                + "Se cerrarán sus visores y se restaurará el bloque sin generar drops.");
+        closeAllViewersAndPersist(id, true);
+        if (!graves.containsKey(id)) return; // Quedó vacía y fue retirada normalmente.
+        restoreGraveHead(block, meta);
+    }
+
+    private Block loadedGraveBlock(GraveMeta meta) {
+        if (meta == null) return null;
+        World world = Bukkit.getWorld(meta.world());
+        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) return null;
+        return world.getBlockAt(meta.x(), meta.y(), meta.z());
+    }
+
+    private void restoreGraveHead(Block block, GraveMeta meta) {
+        block.setType(Material.PLAYER_HEAD, false);
+        Skull skull = (Skull) block.getState();
+        skull.getPersistentDataContainer().set(graveKey, PersistentDataType.STRING, meta.id().toString());
+        Player owner = Bukkit.getPlayer(meta.ownerUuid());
+        if (owner != null) {
+            applyTexture(skull, owner);
+        } else {
+            PlayerProfile profile = Bukkit.createPlayerProfile(meta.ownerUuid(), meta.ownerName());
+            skull.setOwnerProfile(profile);
+        }
+        skull.update(true, false);
+    }
+
+    private void closeAllViewersAndPersist(UUID id, boolean notify) {
+        Inventory inventory = openGraveInventories.get(id);
+        Set<UUID> viewers = new LinkedHashSet<>(activeViewers.getOrDefault(id, Set.of()));
+        forcedClosingGraves.add(id);
+        try {
+            for (UUID viewerId : viewers) {
+                Player viewer = Bukkit.getPlayer(viewerId);
+                if (viewer == null) continue;
+                if (notify) send(viewer, "messages.grave-forced-closed", Map.of());
+                if (viewer.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder holder
+                        && holder.graveId().equals(id)) viewer.closeInventory();
+            }
+            activeViewers.remove(id);
+            openGraveInventories.remove(id);
+            if (inventory != null) saveInventoryAndMaybeRemove(id, inventory, false);
+        } finally {
+            forcedClosingGraves.remove(id);
+        }
+    }
+
+    private boolean isBeingViewed(UUID id) {
+        pruneInactiveViewers(id);
+        Set<UUID> viewers = activeViewers.get(id);
+        return viewers != null && !viewers.isEmpty();
+    }
+
+    private void pruneInactiveViewers(UUID id) {
+        Set<UUID> viewers = activeViewers.get(id);
+        if (viewers == null) return;
+        viewers.removeIf(viewerId -> {
+            Player player = Bukkit.getPlayer(viewerId);
+            if (player == null) return true;
+            Inventory top = player.getOpenInventory().getTopInventory();
+            return !(top.getHolder() instanceof GraveHolder holder) || !holder.graveId().equals(id);
+        });
+        if (viewers.isEmpty()) activeViewers.remove(id);
+    }
+
     private void scheduleCleanup() {
         if (cleanupTask != null) cleanupTask.cancel();
         long seconds = Math.max(60L, getConfig().getLong("settings.cleanup-interval-seconds", 300L));
@@ -393,7 +600,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         List<UUID> expired = graves.values().stream().filter(g -> g.expiresAt() <= now).map(GraveMeta::id).toList();
         int removed = 0;
         for (UUID id : expired) {
-            if (activeViewers.containsKey(id)) continue;
+            if (isBeingViewed(id)) continue;
             GraveMeta meta = graves.get(id);
             if (meta == null) continue;
             try {
@@ -419,6 +626,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         graves.remove(id);
         gravesByBlock.remove(meta.blockKey());
         activeViewers.remove(id);
+        openGraveInventories.remove(id);
+        forcedClosingGraves.remove(id);
 
         World world = Bukkit.getWorld(meta.world());
         if (world != null && world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) {
@@ -604,16 +813,37 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private boolean canReplace(Block block) {
         Material type = block.getType();
-        return type.isAir() || type == Material.WATER || type == Material.LAVA || type == Material.FIRE
-                || type == Material.SOUL_FIRE || type == Material.TALL_GRASS || type == Material.SHORT_GRASS
-                || type == Material.SNOW || type == Material.VINE || type == Material.CAVE_VINES
-                || type == Material.CAVE_VINES_PLANT;
+        if (type.isAir() || type == Material.WATER || type == Material.LAVA
+                || type == Material.FIRE || type == Material.SOUL_FIRE) return true;
+        if (!getConfig().getBoolean("settings.replace-thin-blocks", true)) return false;
+        return isThinReplaceable(type);
     }
 
-    private UUID graveId(Block block) {
+    /**
+     * Bloques de superficie, vegetación y cultivos que la bolsa puede sustituir sin
+     * generar drops. Se usan nombres para mantener compatibilidad con materiales
+     * vegetales añadidos en revisiones 1.21.x sin depender de Tags experimentales.
+     */
+    private boolean isThinReplaceable(Material type) {
+        String name = type.name();
+        if (name.endsWith("_CARPET") || name.endsWith("_SAPLING")
+                || name.endsWith("_TULIP") || name.endsWith("_FLOWER")
+                || name.endsWith("_MUSHROOM") || name.endsWith("_FUNGUS")
+                || name.endsWith("_ROOTS") || name.endsWith("_VINES")
+                || name.endsWith("_VINES_PLANT")) return true;
+
+        return THIN_REPLACEABLE_MATERIALS.contains(name);
+    }
+
+    /** Devuelve el ID registrado para una ubicación, aunque otro plugin haya cambiado el bloque. */
+    private UUID trackedGraveId(Block block) {
         BlockKey key = new BlockKey(block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
         UUID cached = gravesByBlock.get(key);
-        if (cached != null) return cached;
+        return cached != null ? cached : physicalGraveId(block);
+    }
+
+    /** Lee exclusivamente la cabeza física y su PDC; no confía en el caché de ubicación. */
+    private UUID physicalGraveId(Block block) {
         if (!(block.getState() instanceof Skull skull)) return null;
         String raw = skull.getPersistentDataContainer().get(graveKey, PersistentDataType.STRING);
         if (raw == null) return null;
@@ -621,8 +851,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private boolean isOurHead(Block block, UUID id) {
-        UUID found = graveId(block);
-        return id.equals(found);
+        return id.equals(physicalGraveId(block));
     }
 
 
@@ -783,7 +1012,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         Block head = world.getBlockAt(x, y + 1, z);
         Block floor = world.getBlockAt(x, y - 1, z);
         if (!feet.isPassable() || !head.isPassable()) return false;
-        return floor.getType().isSolid() || graveId.equals(graveId(floor));
+        return floor.getType().isSolid() || graveId.equals(trackedGraveId(floor));
     }
 
     @Override
@@ -810,12 +1039,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.6 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.7 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
             scheduleCleanup();
+            scheduleOpenGraveIntegrityGuard();
             send(sender, "messages.reload", Map.of());
             return true;
         }
@@ -877,6 +1107,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         graves.clear();
         gravesByBlock.clear();
         activeViewers.clear();
+        openGraveInventories.clear();
+        forcedClosingGraves.clear();
 
         // Solo toca bloques en chunks ya cargados. Los chunks descargados no se fuerzan;
         // sus cabezas huérfanas serán retiradas por ChunkLoadEvent cuando vuelvan a cargar.

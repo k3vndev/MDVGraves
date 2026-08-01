@@ -1,0 +1,44 @@
+MDVGraves 1.0.7 - Protección anti-duplicación y colocación fina
+================================================================
+
+CORRECCIÓN CRÍTICA
+------------------
+1. Una bolsa abierta ya no puede entrar en la ruta de rotura.
+2. Minería, explosiones, pistones, fluidos, fuego, física y cambios de entidades
+   se cancelan cuando afectan una bolsa activa.
+3. Cada bolsa utiliza un solo inventario canónico. No se generan copias visuales
+   independientes aunque single-viewer-lock esté desactivado.
+4. Un guardián revisa únicamente bolsas abiertas. Si otro plugin cambia el bloque:
+   - Cierra a todos los visores.
+   - Guarda el inventario una sola vez.
+   - Restaura la cabeza sin generar drops.
+
+COLOCACIÓN
+----------
+La bolsa puede sustituir sin drops:
+- Alfombras.
+- Capas de nieve.
+- Cultivos.
+- Hierbas, flores, helechos, hongos y raíces.
+- Enredaderas, vegetación acuática, pétalos, hojarasca y musgos finos.
+
+CONFIG NUEVA
+------------
+settings:
+  replace-thin-blocks: true
+  open-grave-integrity-check-ticks: 1
+
+MENSAJES NUEVOS
+---------------
+messages:
+  grave-in-use-break: '&cNo puedes romper esta bolsa mientras alguien está revisándola.'
+  grave-forced-closed: '&cLa bolsa fue alterada externamente. Se cerró para proteger su contenido.'
+
+MIGRACIÓN
+---------
+1. Apaga el servidor.
+2. Haz backup de plugins/MDVGraves/graves.db y config.yml.
+3. Reemplaza el JAR por MDVGraves-1.0.7.jar.
+4. Conserva graves.db; no hay cambios de esquema SQLite.
+5. Añade las dos claves y los dos mensajes anteriores a tu config existente.
+6. Inicia el servidor y ejecuta /mdvgraves info.

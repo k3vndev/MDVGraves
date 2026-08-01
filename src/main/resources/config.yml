@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.6 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.7 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -20,6 +20,14 @@ settings:
   # Si no puede colocar una cabeza de forma segura, deja los drops vanilla.
   placement-search-radius: 2
 
+  # La bolsa sustituye directamente alfombras, capas de nieve, cultivos,
+  # vegetación y otros bloques finos. El bloque sustituido no genera drops.
+  replace-thin-blocks: true
+
+  # Revisa únicamente bolsas que estén abiertas. Si otro plugin consigue cambiar
+  # físicamente una, cierra sus inventarios, guarda una sola copia y la restaura.
+  open-grave-integrity-check-ticks: 1
+
   remove-when-empty: true
   # true: una explosión que alcance la bolsa la rompe y suelta su contenido normal.
   # false: las bolsas son inmunes a explosiones.
@@ -37,6 +45,7 @@ settings:
   break-drops-items: true
 
   # Evita dos inventarios simultáneos sobre la misma bolsa.
+  # Aunque se desactive, todos comparten un único inventario canónico.
   single-viewer-lock: true
 
 # ==========================================================
@@ -91,6 +100,8 @@ messages:
   grave-created: '&eTus pertenencias quedaron guardadas en una bolsa. &7X:&f{x} &7Y:&f{y} &7Z:&f{z}'
   grave-opened: '&eHas abierto la bolsa perdida de &f{owner}&e.'
   grave-busy: '&cOtra persona está revisando esta bolsa.'
+  grave-in-use-break: '&cNo puedes romper esta bolsa mientras alguien está revisándola.'
+  grave-forced-closed: '&cLa bolsa fue alterada externamente. Se cerró para proteger su contenido.'
   not-owner: '&cEsta bolsa no te pertenece.'
   grave-expired-owner: '&7Una de tus bolsas perdidas se ha desvanecido.'
   grave-broken: '&eLa bolsa se rompió y sus pertenencias cayeron al suelo.'

@@ -1,0 +1,12 @@
+# Añadir dentro de settings:
+settings:
+  # Reemplaza alfombras, nieve, cultivos y vegetación fina sin generar drops.
+  replace-thin-blocks: true
+
+  # Solo revisa bolsas que estén abiertas. 1 = cada tick.
+  open-grave-integrity-check-ticks: 1
+
+# Añadir dentro de messages:
+messages:
+  grave-in-use-break: '&cNo puedes romper esta bolsa mientras alguien está revisándola.'
+  grave-forced-closed: '&cLa bolsa fue alterada externamente. Se cerró para proteger su contenido.'
