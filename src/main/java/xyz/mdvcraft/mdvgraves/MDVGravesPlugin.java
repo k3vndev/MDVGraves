@@ -4,6 +4,8 @@ import org.bukkit.*;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Skull;
+import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
@@ -20,6 +22,7 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -34,6 +37,7 @@ import org.bukkit.util.io.BukkitObjectInputStream;
 import org.bukkit.util.io.BukkitObjectOutputStream;
 
 import java.io.*;
+import java.lang.reflect.Method;
 import java.sql.*;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -74,6 +78,14 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private BukkitTask cleanupTask;
     private BukkitTask integrityTask;
     private final Map<UUID, Long> graveBackCooldowns = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> deathFruitUseLocks = new ConcurrentHashMap<>();
+    private final Map<UUID, PendingDeathFruitUse> pendingDeathFruitUses = new ConcurrentHashMap<>();
+    private Method nbtItemGetMethod;
+    private Method nbtItemGetStringMethod;
+    private boolean mmoItemsBridgeReady;
+    private boolean mmoItemsBridgeWarningLogged;
+    private String deathFruitExpectedType = "CONSUMABLE";
+    private String deathFruitExpectedId = "FRUTA_DE_LA_MUERTE";
 
     @Override
     public void onEnable() {
@@ -89,9 +101,10 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return;
         }
         getServer().getPluginManager().registerEvents(this, this);
+        setupMmoItemsBridge();
         scheduleCleanup();
         scheduleOpenGraveIntegrityGuard();
-        getLogger().info("MDVGraves 1.0.7 activo. Bolsas cargadas: " + graves.size());
+        getLogger().info("MDVGraves 1.0.8 activo. Bolsas cargadas: " + graves.size());
     }
 
     @Override
@@ -106,6 +119,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         activeViewers.clear();
         openGraveInventories.clear();
         forcedClosingGraves.clear();
+        deathFruitUseLocks.clear();
+        pendingDeathFruitUses.clear();
         try {
             if (connection != null && !connection.isClosed()) connection.close();
         } catch (SQLException ignored) { }
@@ -208,6 +223,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         GraveMeta meta = new GraveMeta(id, player.getUniqueId(), player.getName(), target.getWorld().getName(),
                 target.getX(), target.getY(), target.getZ(), created, null, expires, ownerProtected);
 
+        SupportPatch supportPatch = stabilizePlacementSupport(target);
         try {
             byte[] blob = serializeItems(drops);
             placeGraveHead(target, id, player);
@@ -221,8 +237,27 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         } catch (Exception ex) {
             // Rollback visual: nunca quitamos drops si la persistencia falló.
             if (isOurHead(target, id)) target.setType(Material.AIR, false);
+            rollbackSupportPatch(supportPatch);
             getLogger().log(Level.SEVERE, "No se pudo crear la bolsa de " + player.getName() + ". Se conservaron drops vanilla.", ex);
         }
+    }
+
+    @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        pendingDeathFruitUses.remove(event.getPlayer().getUniqueId());
+        deathFruitUseLocks.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
+    public void onDeathFruitUseStart(PlayerInteractEvent event) {
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return;
+        if (event.getHand() == null) return;
+        if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
+        ItemStack item = event.getItem();
+        if (!isConfiguredDeathFruit(item)) return;
+
+        pendingDeathFruitUses.put(event.getPlayer().getUniqueId(),
+                new PendingDeathFruitUse(event.getHand(), item.clone(), item.getAmount(), System.currentTimeMillis()));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
@@ -811,6 +846,45 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         return null;
     }
 
+
+    /**
+     * Algunos bloques de suelo parcial (por ejemplo DIRT_PATH y FARMLAND) no son un
+     * soporte estable para una PLAYER_HEAD de suelo. La corrección solo se evalúa
+     * cuando realmente va a crearse una tumba, por lo que no añade tareas periódicas.
+     *
+     * Los reemplazos son configurables. Si la creación de la tumba falla, el bloque
+     * original se restaura para no modificar el mapa por un error de persistencia.
+     */
+    private SupportPatch stabilizePlacementSupport(Block target) {
+        if (!getConfig().getBoolean("settings.placement-support-fixes.enabled", true)) return null;
+        Block support = target.getRelative(BlockFace.DOWN);
+        ConfigurationSection replacements = getConfig().getConfigurationSection("settings.placement-support-fixes.replacements");
+        if (replacements == null) return null;
+
+        String configured = replacements.getString(support.getType().name());
+        if (configured == null || configured.isBlank()) return null;
+
+        Material replacement = Material.matchMaterial(configured.trim());
+        if (replacement == null || replacement.isAir() || !replacement.isBlock()) {
+            getLogger().warning("Reemplazo inválido para soporte de tumba " + support.getType()
+                    + ": " + configured);
+            return null;
+        }
+
+        BlockData original = support.getBlockData().clone();
+        support.setType(replacement, false);
+        return new SupportPatch(support, original);
+    }
+
+    private void rollbackSupportPatch(SupportPatch patch) {
+        if (patch == null) return;
+        try {
+            patch.block().setBlockData(patch.original(), false);
+        } catch (Exception ex) {
+            getLogger().log(Level.WARNING, "No se pudo restaurar el bloque de soporte tras fallar una tumba.", ex);
+        }
+    }
+
     private boolean canReplace(Block block) {
         Material type = block.getType();
         if (type.isAir() || type == Material.WATER || type == Material.LAVA
@@ -907,72 +981,270 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private boolean executeGraveBack(Player player) {
-        if (!getConfig().getBoolean("utilities.back-grave.enabled", true)) {
-            send(player, "messages.back-disabled", Map.of());
-            return true;
+        attemptGraveBack(player, false, false, false, true);
+        return true;
+    }
+
+    /**
+     * Ejecuta el viaje a la última tumba del jugador.
+     *
+     * @param bypassEnabled    ignora utilities.back-grave.enabled (admin/fruta)
+     * @param bypassPermission ignora mdvgraves.back
+     * @param bypassCooldown   ignora y no aplica cooldown
+     * @param sendMessages     usa los mensajes normales de /graveback
+     */
+    private GraveBackResult attemptGraveBack(Player player, boolean bypassEnabled, boolean bypassPermission,
+                                             boolean bypassCooldown, boolean sendMessages) {
+        if (!bypassEnabled && !getConfig().getBoolean("utilities.back-grave.enabled", true)) {
+            if (sendMessages) send(player, "messages.back-disabled", Map.of());
+            return GraveBackResult.DISABLED;
         }
-        if (!player.hasPermission("mdvgraves.back")) {
-            send(player, "messages.no-permission", Map.of());
-            return true;
+        if (!bypassPermission && !player.hasPermission("mdvgraves.back")) {
+            if (sendMessages) send(player, "messages.no-permission", Map.of());
+            return GraveBackResult.NO_PERMISSION;
         }
 
         long cooldownSeconds = Math.max(0L, getConfig().getLong("utilities.back-grave.cooldown-seconds", 30L));
-        if (cooldownSeconds > 0L && !player.hasPermission("mdvgraves.back.cooldown.bypass")) {
+        if (!bypassCooldown && cooldownSeconds > 0L && !player.hasPermission("mdvgraves.back.cooldown.bypass")) {
             long now = System.currentTimeMillis();
             long availableAt = graveBackCooldowns.getOrDefault(player.getUniqueId(), 0L);
             if (availableAt > now) {
                 long remaining = Math.max(1L, (availableAt - now + 999L) / 1000L);
-                send(player, "messages.back-cooldown", Map.of("seconds", Long.toString(remaining)));
-                return true;
+                if (sendMessages) send(player, "messages.back-cooldown", Map.of("seconds", Long.toString(remaining)));
+                return GraveBackResult.COOLDOWN;
             }
         }
 
-        GraveMeta latest = graves.values().stream()
-                .filter(meta -> meta.ownerUuid().equals(player.getUniqueId()))
-                .max(Comparator.comparingLong(GraveMeta::createdAt))
-                .orElse(null);
+        GraveMeta latest = latestGrave(player.getUniqueId());
         if (latest == null) {
-            send(player, "messages.back-no-graves", Map.of());
-            return true;
+            if (sendMessages) send(player, "messages.back-no-graves", Map.of());
+            return GraveBackResult.NO_GRAVES;
         }
 
         World world = Bukkit.getWorld(latest.world());
         if (world == null) {
-            send(player, "messages.back-world-unavailable", Map.of("world", latest.world()));
-            return true;
+            if (sendMessages) send(player, "messages.back-world-unavailable", Map.of("world", latest.world()));
+            return GraveBackResult.WORLD_UNAVAILABLE;
         }
 
         world.getChunkAt(latest.x() >> 4, latest.z() >> 4).load();
         int radius = Math.max(0, getConfig().getInt("utilities.back-grave.safe-search-radius", 3));
         Location destination = findSafeTeleportLocation(latest, world, radius, player.getLocation());
         if (destination == null) {
-            send(player, "messages.back-no-safe-location", Map.of(
+            if (sendMessages) send(player, "messages.back-no-safe-location", Map.of(
                     "world", latest.world(),
                     "x", Integer.toString(latest.x()),
                     "y", Integer.toString(latest.y()),
                     "z", Integer.toString(latest.z())));
-            return true;
+            return GraveBackResult.NO_SAFE_LOCATION;
         }
 
         if (!player.teleport(destination, PlayerTeleportEvent.TeleportCause.COMMAND)) {
-            send(player, "messages.back-teleport-failed", Map.of());
-            return true;
+            if (sendMessages) send(player, "messages.back-teleport-failed", Map.of());
+            return GraveBackResult.TELEPORT_FAILED;
         }
 
-        if (cooldownSeconds > 0L && !player.hasPermission("mdvgraves.back.cooldown.bypass")) {
+        if (!bypassCooldown && cooldownSeconds > 0L && !player.hasPermission("mdvgraves.back.cooldown.bypass")) {
             graveBackCooldowns.put(player.getUniqueId(), System.currentTimeMillis() + cooldownSeconds * 1000L);
         }
 
-        String sound = getConfig().getString("utilities.back-grave.sound", "entity.enderman.teleport");
+        if (sendMessages) {
+            playConfiguredSound(player, "utilities.back-grave.sound", "entity.enderman.teleport");
+            send(player, "messages.back-teleported", graveLocationPlaceholders(latest));
+        }
+        return GraveBackResult.SUCCESS;
+    }
+
+    private GraveMeta latestGrave(UUID owner) {
+        return graves.values().stream()
+                .filter(meta -> meta.ownerUuid().equals(owner))
+                .max(Comparator.comparingLong(GraveMeta::createdAt))
+                .orElse(null);
+    }
+
+    private Map<String, String> graveLocationPlaceholders(GraveMeta meta) {
+        return Map.of(
+                "world", meta.world(),
+                "x", Integer.toString(meta.x()),
+                "y", Integer.toString(meta.y()),
+                "z", Integer.toString(meta.z()));
+    }
+
+    private void playConfiguredSound(Player player, String path, String fallback) {
+        String sound = getConfig().getString(path, fallback);
         if (sound != null && !sound.isBlank()) {
             player.playSound(player.getLocation(), sound, 1.0f, 1.0f);
         }
-        send(player, "messages.back-teleported", Map.of(
-                "world", latest.world(),
-                "x", Integer.toString(latest.x()),
-                "y", Integer.toString(latest.y()),
-                "z", Integer.toString(latest.z())));
+    }
+
+    /**
+     * Comando interno para la Fruta de la Muerte. Debe ejecutarlo la consola desde
+     * una acción del CONSUMABLE de MMOItems. La fruta NO debe autoconsumirse en MI:
+     * MDVGraves quita exactamente una unidad solo después de un teleport exitoso.
+     */
+    private boolean executeDeathFruit(CommandSender sender, String[] args) {
+        if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)) {
+            send(sender, "messages.death-fruit-console-only", Map.of());
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(color("&cUso: /mdvgraves deathfruit <jugador>"));
+            return true;
+        }
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return true;
+
+        Player player = Bukkit.getPlayerExact(args[1]);
+        if (player == null) {
+            send(sender, "messages.player-not-found", Map.of("player", args[1]));
+            return true;
+        }
+
+        long now = System.currentTimeMillis();
+        long lockMs = Math.max(0L, getConfig().getLong("utilities.death-fruit.use-lock-ms", 750L));
+        long lockedUntil = deathFruitUseLocks.getOrDefault(player.getUniqueId(), 0L);
+        if (lockedUntil > now) return true;
+        if (lockMs > 0L) deathFruitUseLocks.put(player.getUniqueId(), now + lockMs);
+
+        PendingDeathFruitUse pending = resolveDeathFruitUse(player, now);
+        if (pending == null) {
+            send(player, "messages.death-fruit-not-held", Map.of());
+            return true;
+        }
+        boolean alreadyConsumedByMmoItems = wasFruitAlreadyConsumed(player, pending);
+
+        GraveBackResult result = attemptGraveBack(player, true, true, true, false);
+        if (result != GraveBackResult.SUCCESS) {
+            // Seguridad extra: si la versión/config de MMOItems descontó el consumible
+            // antes de ejecutar el comando, se devuelve exactamente 1 unidad al fallar.
+            if (alreadyConsumedByMmoItems) refundDeathFruit(player, pending.snapshot());
+            sendDeathFruitFailure(player, result);
+            return true;
+        }
+
+        // Si MMOItems ya descontó una unidad no tocamos el stack. Si no lo hizo
+        // (config recomendada), MDVGraves consume exactamente una tras el teleport.
+        if (!alreadyConsumedByMmoItems && !consumeDeathFruit(player, pending.hand())) {
+            getLogger().warning("La Fruta de la Muerte de " + player.getName()
+                    + " no pudo consumirse después de un graveback exitoso.");
+        }
+
+        playConfiguredSound(player, "utilities.death-fruit.sound", "entity.enderman.teleport");
+        send(player, "messages.death-fruit-success", Map.of());
         return true;
+    }
+
+    private void sendDeathFruitFailure(Player player, GraveBackResult result) {
+        switch (result) {
+            case NO_GRAVES -> send(player, "messages.death-fruit-no-graves", Map.of());
+            case WORLD_UNAVAILABLE -> {
+                GraveMeta latest = latestGrave(player.getUniqueId());
+                send(player, "messages.back-world-unavailable",
+                        latest == null ? Map.of("world", "?") : Map.of("world", latest.world()));
+            }
+            case NO_SAFE_LOCATION -> {
+                GraveMeta latest = latestGrave(player.getUniqueId());
+                if (latest == null) send(player, "messages.death-fruit-no-graves", Map.of());
+                else send(player, "messages.back-no-safe-location", graveLocationPlaceholders(latest));
+            }
+            case TELEPORT_FAILED -> send(player, "messages.back-teleport-failed", Map.of());
+            default -> send(player, "messages.death-fruit-failed", Map.of());
+        }
+    }
+
+    private PendingDeathFruitUse resolveDeathFruitUse(Player player, long now) {
+        PendingDeathFruitUse pending = pendingDeathFruitUses.remove(player.getUniqueId());
+        long maxAge = Math.max(250L, getConfig().getLong("utilities.death-fruit.pending-use-max-age-ms", 2000L));
+        if (pending != null && now - pending.createdAt() <= maxAge && isConfiguredDeathFruit(pending.snapshot())) {
+            return pending;
+        }
+
+        EquipmentSlot hand = findDeathFruitHand(player);
+        if (hand == null) return null;
+        ItemStack stack = hand == EquipmentSlot.OFF_HAND
+                ? player.getInventory().getItemInOffHand()
+                : player.getInventory().getItemInMainHand();
+        return new PendingDeathFruitUse(hand, stack.clone(), stack.getAmount(), now);
+    }
+
+    private boolean wasFruitAlreadyConsumed(Player player, PendingDeathFruitUse pending) {
+        ItemStack current = pending.hand() == EquipmentSlot.OFF_HAND
+                ? player.getInventory().getItemInOffHand()
+                : player.getInventory().getItemInMainHand();
+        if (!isConfiguredDeathFruit(current)) return true;
+        return current.getAmount() < pending.originalAmount();
+    }
+
+    private void refundDeathFruit(Player player, ItemStack snapshot) {
+        ItemStack refund = snapshot.clone();
+        refund.setAmount(1);
+        Map<Integer, ItemStack> leftovers = player.getInventory().addItem(refund);
+        if (!leftovers.isEmpty()) {
+            for (ItemStack item : leftovers.values()) {
+                player.getWorld().dropItemNaturally(player.getLocation(), item);
+            }
+        }
+    }
+
+    private EquipmentSlot findDeathFruitHand(Player player) {
+        if (isConfiguredDeathFruit(player.getInventory().getItemInMainHand())) return EquipmentSlot.HAND;
+        if (isConfiguredDeathFruit(player.getInventory().getItemInOffHand())) return EquipmentSlot.OFF_HAND;
+        return null;
+    }
+
+    private boolean consumeDeathFruit(Player player, EquipmentSlot hand) {
+        ItemStack stack = hand == EquipmentSlot.OFF_HAND
+                ? player.getInventory().getItemInOffHand()
+                : player.getInventory().getItemInMainHand();
+        if (!isConfiguredDeathFruit(stack)) return false;
+        if (stack.getAmount() <= 1) {
+            if (hand == EquipmentSlot.OFF_HAND) player.getInventory().setItemInOffHand(null);
+            else player.getInventory().setItemInMainHand(null);
+        } else {
+            stack.setAmount(stack.getAmount() - 1);
+        }
+        return true;
+    }
+
+    private void setupMmoItemsBridge() {
+        mmoItemsBridgeReady = false;
+        mmoItemsBridgeWarningLogged = false;
+        nbtItemGetMethod = null;
+        nbtItemGetStringMethod = null;
+        deathFruitExpectedType = Optional.ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-type", "CONSUMABLE"))
+                .orElse("CONSUMABLE");
+        deathFruitExpectedId = Optional.ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-id", "FRUTA_DE_LA_MUERTE"))
+                .orElse("FRUTA_DE_LA_MUERTE");
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return;
+        if (Bukkit.getPluginManager().getPlugin("MMOItems") == null
+                || Bukkit.getPluginManager().getPlugin("MythicLib") == null) {
+            getLogger().warning("Fruta de la Muerte activada, pero MMOItems/MythicLib no están disponibles.");
+            return;
+        }
+        try {
+            Class<?> nbtItemClass = Class.forName("io.lumine.mythic.lib.api.item.NBTItem");
+            nbtItemGetMethod = nbtItemClass.getMethod("get", ItemStack.class);
+            nbtItemGetStringMethod = nbtItemClass.getMethod("getString", String.class);
+            mmoItemsBridgeReady = true;
+        } catch (ReflectiveOperationException ex) {
+            getLogger().log(Level.WARNING, "No se pudo inicializar el puente MMOItems/MythicLib para la Fruta de la Muerte.", ex);
+        }
+    }
+
+    private boolean isConfiguredDeathFruit(ItemStack stack) {
+        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta() || !mmoItemsBridgeReady) return false;
+        try {
+            Object nbt = nbtItemGetMethod.invoke(null, stack);
+            String type = String.valueOf(nbtItemGetStringMethod.invoke(nbt, "MMOITEMS_ITEM_TYPE"));
+            String id = String.valueOf(nbtItemGetStringMethod.invoke(nbt, "MMOITEMS_ITEM_ID"));
+            return deathFruitExpectedType.equalsIgnoreCase(type)
+                    && deathFruitExpectedId.equalsIgnoreCase(id);
+        } catch (ReflectiveOperationException ex) {
+            if (!mmoItemsBridgeWarningLogged) {
+                mmoItemsBridgeWarningLogged = true;
+                getLogger().log(Level.WARNING, "No se pudo leer un MMOItem para la Fruta de la Muerte.", ex);
+            }
+            return false;
+        }
     }
 
     private Location findSafeTeleportLocation(GraveMeta meta, World world, int radius, Location facing) {
@@ -1018,17 +1290,63 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (command.getName().equalsIgnoreCase("graveback")) {
+            if (args.length >= 1) {
+                if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)
+                        && !sender.hasPermission("mdvgraves.back.others")
+                        && !sender.hasPermission("mdvgraves.admin")) {
+                    send(sender, "messages.no-permission", Map.of());
+                    return true;
+                }
+                Player target = Bukkit.getPlayerExact(args[0]);
+                if (target == null) {
+                    send(sender, "messages.player-not-found", Map.of("player", args[0]));
+                    return true;
+                }
+                GraveBackResult result = attemptGraveBack(target, true, true, true, true);
+                if (result == GraveBackResult.SUCCESS) {
+                    send(sender, "messages.back-other-success", Map.of("player", target.getName()));
+                } else {
+                    send(sender, "messages.back-other-failed", Map.of("player", target.getName()));
+                }
+                return true;
+            }
             if (!(sender instanceof Player player)) {
-                send(sender, "messages.players-only", Map.of());
+                sender.sendMessage(color("&cUso desde consola: /graveback <jugador>"));
                 return true;
             }
             return executeGraveBack(player);
         }
 
+        if (args.length > 0 && (args[0].equalsIgnoreCase("deathfruit")
+                || args[0].equalsIgnoreCase("fruta")
+                || args[0].equalsIgnoreCase("frutamuerte"))) {
+            return executeDeathFruit(sender, args);
+        }
+
         if (args.length > 0 && (args[0].equalsIgnoreCase("back")
                 || args[0].equalsIgnoreCase("volver") || args[0].equalsIgnoreCase("regresar"))) {
+            if (args.length >= 2) {
+                if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)
+                        && !sender.hasPermission("mdvgraves.back.others")
+                        && !sender.hasPermission("mdvgraves.admin")) {
+                    send(sender, "messages.no-permission", Map.of());
+                    return true;
+                }
+                Player target = Bukkit.getPlayerExact(args[1]);
+                if (target == null) {
+                    send(sender, "messages.player-not-found", Map.of("player", args[1]));
+                    return true;
+                }
+                GraveBackResult result = attemptGraveBack(target, true, true, true, true);
+                if (result == GraveBackResult.SUCCESS) {
+                    send(sender, "messages.back-other-success", Map.of("player", target.getName()));
+                } else {
+                    send(sender, "messages.back-other-failed", Map.of("player", target.getName()));
+                }
+                return true;
+            }
             if (!(sender instanceof Player player)) {
-                send(sender, "messages.players-only", Map.of());
+                sender.sendMessage(color("&cUso: /mdvgraves back <jugador>"));
                 return true;
             }
             return executeGraveBack(player);
@@ -1039,11 +1357,12 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return true;
         }
         if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.7 &7| Bolsas activas: &e" + graves.size()));
+            sender.sendMessage(color("&6MDVGraves &f1.0.8 &7| Bolsas activas: &e" + graves.size()));
             return true;
         }
         if (args[0].equalsIgnoreCase("reload")) {
             reloadConfig();
+            setupMmoItemsBridge();
             scheduleCleanup();
             scheduleOpenGraveIntegrityGuard();
             send(sender, "messages.reload", Map.of());
@@ -1074,7 +1393,25 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (command.getName().equalsIgnoreCase("graveback")) return List.of();
+        if (command.getName().equalsIgnoreCase("graveback")) {
+            if (args.length == 1 && (sender instanceof org.bukkit.command.ConsoleCommandSender
+                    || sender.hasPermission("mdvgraves.back.others") || sender.hasPermission("mdvgraves.admin"))) {
+                String prefix = args[0].toLowerCase(Locale.ROOT);
+                return Bukkit.getOnlinePlayers().stream().map(Player::getName)
+                        .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
+            }
+            return List.of();
+        }
+
+        if (args.length == 2 && (args[0].equalsIgnoreCase("back")
+                || args[0].equalsIgnoreCase("volver") || args[0].equalsIgnoreCase("regresar"))
+                && (sender instanceof org.bukkit.command.ConsoleCommandSender
+                || sender.hasPermission("mdvgraves.back.others") || sender.hasPermission("mdvgraves.admin"))) {
+            String prefix = args[1].toLowerCase(Locale.ROOT);
+            return Bukkit.getOnlinePlayers().stream().map(Player::getName)
+                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
+        }
+
         if (args.length != 1) return List.of();
         List<String> options = new ArrayList<>();
         if (sender.hasPermission("mdvgraves.back")) options.add("back");
@@ -1120,6 +1457,21 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
         return deleted;
     }
+
+    private enum GraveBackResult {
+        SUCCESS,
+        DISABLED,
+        NO_PERMISSION,
+        COOLDOWN,
+        NO_GRAVES,
+        WORLD_UNAVAILABLE,
+        NO_SAFE_LOCATION,
+        TELEPORT_FAILED
+    }
+
+    private record SupportPatch(Block block, BlockData original) { }
+
+    private record PendingDeathFruitUse(EquipmentSlot hand, ItemStack snapshot, int originalAmount, long createdAt) { }
 
     private record BlockKey(String world, int x, int y, int z) { }
 

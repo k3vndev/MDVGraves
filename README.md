@@ -1,4 +1,4 @@
-# MDVGraves 1.0.7
+# MDVGraves 1.0.8
 
 Plugin ligero de bolsas de muerte para Purpur/Paper 1.21.6 y Java 21.
 
@@ -15,6 +15,64 @@ Plugin ligero de bolsas de muerte para Purpur/Paper 1.21.6 y Java 21.
 - SQLite persistente en `plugins/MDVGraves/graves.db`, con WAL, índice de expiración y objetos comprimidos.
 - La limpieza ocurre cada 5 minutos. La única comprobación frecuente recorre exclusivamente las bolsas que estén abiertas.
 - No fuerza chunks durante la limpieza. Una cabeza expirada en un chunk descargado se limpia cuando ese chunk vuelva a cargar.
+
+
+## Novedades 1.0.8
+
+### Fruta de la Muerte (MMOItems CONSUMABLE)
+
+MDVGraves reconoce por NBT el `type` e `id` reales de MMOItems y solo acepta el consumible configurado:
+
+```yaml
+utilities:
+  death-fruit:
+    enabled: true
+    mmoitems-type: 'CONSUMABLE'
+    mmoitems-id: 'FRUTA_DE_LA_MUERTE'
+    use-lock-ms: 750
+    pending-use-max-age-ms: 2000
+    sound: 'entity.enderman.teleport'
+```
+
+El MMOItem debe ejecutar desde consola:
+
+```text
+mdvgraves deathfruit %player%
+```
+
+Se recomienda `disable-right-click-consume: true`. MDVGraves registra el clic antes de que MMOItems procese el item; si MMOItems ya descontó una unidad y el graveback falla, devuelve exactamente una fruta. Si MMOItems no la descontó, MDVGraves la consume únicamente después de un teleport exitoso. Sin tumba, mundo, destino seguro o teleport válido, la fruta no se pierde.
+
+### Graveback administrativo
+
+Admins y consola pueden forzar el regreso de un jugador aunque ese jugador no tenga `mdvgraves.back` ni pueda saltar su cooldown:
+
+```text
+/graveback Pedrito
+/mdvgraves back Pedrito
+```
+
+Permiso del ejecutor:
+
+```text
+mdvgraves.back.others
+```
+
+Predeterminado: OP.
+
+### Soporte para DIRT_PATH/FARMLAND
+
+Al crear una tumba sobre suelos parciales configurados, MDVGraves estabiliza únicamente el bloque que queda debajo de la cabeza. Por defecto:
+
+```yaml
+settings:
+  placement-support-fixes:
+    enabled: true
+    replacements:
+      DIRT_PATH: DIRT
+      FARMLAND: DIRT
+```
+
+La comprobación sucede solo al morir/crear una bolsa, sin scanners ni tareas nuevas. Si la persistencia de la tumba falla, el bloque original se restaura.
 
 ## Novedades 1.0.7
 
@@ -120,6 +178,7 @@ utilities:
 |---|---:|---|
 | `mdvgraves.admin` | OP | Administración y bypass de bolsas privadas |
 | `mdvgraves.back` | false | Regresar a la última bolsa |
+| `mdvgraves.back.others` | OP | Forzar el regreso de otro jugador ignorando sus permisos/cooldown |
 | `mdvgraves.back.cooldown.bypass` | OP | Ignorar cooldown de regreso |
 | `mdvgraves.private` | false | Hacer privadas las nuevas bolsas del jugador |
 | `mdvgraves.keepinventory` | false | Conservar inventario y no crear bolsa |
@@ -130,8 +189,12 @@ utilities:
 
 ```text
 /graveback
+/graveback <jugador>
 /back grave
 /mdvgraves back
+/mdvgraves back <jugador>
+# Interno, solo consola para MMOItems:
+/mdvgraves deathfruit <jugador>
 /mdvgraves info
 /mdvgraves reload
 /mdvgraves cleanup
@@ -158,7 +221,7 @@ mvn clean package
 El JAR sombreado queda en:
 
 ```text
-target/MDVGraves-1.0.7.jar
+target/MDVGraves-1.0.8.jar
 ```
 
 También se incluye `.github/workflows/build.yml` para compilar mediante GitHub Actions.

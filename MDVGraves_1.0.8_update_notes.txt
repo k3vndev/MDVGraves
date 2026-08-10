@@ -1,0 +1,30 @@
+MDVGraves 1.0.8
+================
+
+1) Fruta de la Muerte (MMOItems)
+- Soporte para un MMOItem de tipo CONSUMABLE e ID configurable.
+- Comando interno solo consola: mdvgraves deathfruit <jugador>
+- Debe ser ejecutado por el MMOItem como: mdvgraves deathfruit %player%
+- Identificación real por MMOITEMS_ITEM_TYPE y MMOITEMS_ITEM_ID usando MythicLib NBTItem.
+- Sin tumba / mundo / lugar seguro / teleport: NO se consume.
+- En éxito se consume exactamente 1 unidad.
+- Seguridad adicional: MDVGraves registra el clic del consumible. Si MMOItems ya descontó una unidad antes del comando y el viaje falla, devuelve exactamente 1 fruta.
+- Anti doble-disparo configurable mediante use-lock-ms.
+
+2) Graveback de admin/consola
+- /graveback <jugador>
+- /mdvgraves back <jugador>
+- Permiso del ejecutor: mdvgraves.back.others (default op).
+- El objetivo no necesita mdvgraves.back y se ignora su cooldown para este viaje forzado.
+
+3) DIRT_PATH / FARMLAND
+- Nuevo placement-support-fixes.
+- Por defecto DIRT_PATH -> DIRT y FARMLAND -> DIRT solo debajo de una tumba que va a crearse.
+- Sin scans ni tareas adicionales: la comprobación ocurre únicamente en creación de tumba.
+- Si crear/persistir la tumba falla, el soporte original se restaura.
+
+Actualización
+------------
+- No borrar graves.db.
+- No borrar config.yml.
+- Reemplazar el JAR y añadir las nuevas claves de config si se conserva una config anterior.

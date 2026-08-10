@@ -1,5 +1,5 @@
 # ==========================================================
-# MDVGraves 1.0.7 - Bolsas de muerte ligeras para MDVCRAFT
+# MDVGraves 1.0.8 - Bolsas de muerte ligeras para MDVCRAFT
 # ==========================================================
 settings:
   enabled: true
@@ -19,6 +19,15 @@ settings:
 
   # Si no puede colocar una cabeza de forma segura, deja los drops vanilla.
   placement-search-radius: 2
+
+  # Algunos suelos parciales no sostienen correctamente una cabeza de suelo.
+  # Solo se revisa cuando realmente se crea una tumba; no añade tareas periódicas.
+  # DIRT_PATH y FARMLAND se convierten a DIRT bajo la bolsa.
+  placement-support-fixes:
+    enabled: true
+    replacements:
+      DIRT_PATH: DIRT
+      FARMLAND: DIRT
 
   # La bolsa sustituye directamente alfombras, capas de nieve, cultivos,
   # vegetación y otros bloques finos. El bloque sustituido no genera drops.
@@ -63,6 +72,29 @@ utilities:
 
     # Busca un punto seguro alrededor de la última bolsa.
     safe-search-radius: 3
+
+    # Vacío = sin sonido.
+    sound: 'entity.enderman.teleport'
+
+  # Consumible MMOItems: Fruta de la Muerte.
+  # Debe ser un item del tipo/ID configurados y tener desactivado el consumo
+  # automático por clic derecho en MMOItems. MDVGraves quita 1 unidad solo
+  # DESPUÉS de un teleport exitoso.
+  #
+  # Comando que debe ejecutar MMOItems DESDE CONSOLA al consumir:
+  # mdvgraves deathfruit %player%
+  death-fruit:
+    enabled: true
+    mmoitems-type: 'CONSUMABLE'
+    mmoitems-id: 'FRUTA_DE_LA_MUERTE'
+
+    # Anti doble-disparo del mismo clic/skill. No es cooldown de gameplay.
+    use-lock-ms: 750
+
+    # Ventana para asociar el clic del MMOItem con el comando de consola.
+    # Permite detectar si MMOItems descontó el item antes del comando y devolverlo
+    # automáticamente si el graveback falla.
+    pending-use-max-age-ms: 2000
 
     # Vacío = sin sonido.
     sound: 'entity.enderman.teleport'
@@ -122,3 +154,11 @@ messages:
   back-no-safe-location: '&cNo se encontró un lugar seguro cerca de tu bolsa en &e{world} &7({x}, {y}, {z})&c.'
   back-teleport-failed: '&cNo fue posible teletransportarte a tu bolsa.'
   back-teleported: '&aHas regresado a tu última bolsa. &7{world} &f({x}, {y}, {z})'
+  player-not-found: '&cEl jugador &e{player} &cno está conectado.'
+  back-other-success: '&aHas enviado a &e{player} &aa su última bolsa.'
+  back-other-failed: '&cNo se pudo enviar a &e{player} &ca su última bolsa.'
+  death-fruit-console-only: '&cEl comando de la Fruta de la Muerte solo puede ejecutarse desde consola.'
+  death-fruit-not-held: '&cDebes tener la Fruta de la Muerte en la mano para usarla.'
+  death-fruit-no-graves: '&cNo tienes ninguna tumba activa a la que regresar. &7La fruta no fue consumida.'
+  death-fruit-failed: '&cLa Fruta de la Muerte no pudo encontrar un camino hacia tus restos. &7No fue consumida.'
+  death-fruit-success: '&5La Fruta de la Muerte te arrastra hacia tus últimos restos...'
