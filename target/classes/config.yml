@@ -1,0 +1,164 @@
+# ==========================================================
+# MDVGraves 1.0.8 - Bolsas de muerte ligeras para MDVCRAFT
+# ==========================================================
+settings:
+  enabled: true
+
+  # Solo en estos mundos se crean bolsas. En los demás, muerte vanilla normal.
+  enabled-worlds:
+    - world
+
+  # 7 días mientras nadie la haya abierto.
+  unopened-expire-hours: 168
+
+  # Desde la primera apertura, quedan 20 minutos.
+  opened-expire-minutes: 20
+
+  # Una consulta SQLite por intervalo. No revisa tumbas por tick.
+  cleanup-interval-seconds: 300
+
+  # Si no puede colocar una cabeza de forma segura, deja los drops vanilla.
+  placement-search-radius: 2
+
+  # Algunos suelos parciales no sostienen correctamente una cabeza de suelo.
+  # Solo se revisa cuando realmente se crea una tumba; no añade tareas periódicas.
+  # DIRT_PATH y FARMLAND se convierten a DIRT bajo la bolsa.
+  placement-support-fixes:
+    enabled: true
+    replacements:
+      DIRT_PATH: DIRT
+      FARMLAND: DIRT
+
+  # La bolsa sustituye directamente alfombras, capas de nieve, cultivos,
+  # vegetación y otros bloques finos. El bloque sustituido no genera drops.
+  replace-thin-blocks: true
+
+  # Revisa únicamente bolsas que estén abiertas. Si otro plugin consigue cambiar
+  # físicamente una, cierra sus inventarios, guarda una sola copia y la restaura.
+  open-grave-integrity-check-ticks: 1
+
+  remove-when-empty: true
+  # true: una explosión que alcance la bolsa la rompe y suelta su contenido normal.
+  # false: las bolsas son inmunes a explosiones.
+  explosions-break-graves: true
+  protect-from-pistons: true
+  protect-from-fluids: true
+
+  # Las bolsas son una excepción intencional a las protecciones de región:
+  # cualquier jugador puede abrirlas y romperlas para conservar el loot PvP.
+
+  # Cualquier jugador puede abrir o romper cualquier bolsa.
+  only-owner-can-open: false
+
+  # Al romperla, su contenido cae una sola vez como drops normales.
+  break-drops-items: true
+
+  # Evita dos inventarios simultáneos sobre la misma bolsa.
+  # Aunque se desactive, todos comparten un único inventario canónico.
+  single-viewer-lock: true
+
+# ==========================================================
+# UTILIDADES POR PERMISO
+# ==========================================================
+utilities:
+  back-grave:
+    enabled: true
+
+    # Permite también usar /back grave sin reemplazar el /back de Essentials.
+    intercept-back-grave: true
+
+    # 0 desactiva el cooldown.
+    cooldown-seconds: 30
+
+    # Busca un punto seguro alrededor de la última bolsa.
+    safe-search-radius: 3
+
+    # Vacío = sin sonido.
+    sound: 'entity.enderman.teleport'
+
+  # Consumible MMOItems: Fruta de la Muerte.
+  # Debe ser un item del tipo/ID configurados y tener desactivado el consumo
+  # automático por clic derecho en MMOItems. MDVGraves quita 1 unidad solo
+  # DESPUÉS de un teleport exitoso.
+  #
+  # Comando que debe ejecutar MMOItems DESDE CONSOLA al consumir:
+  # mdvgraves deathfruit %player%
+  death-fruit:
+    enabled: true
+    mmoitems-type: 'CONSUMABLE'
+    mmoitems-id: 'FRUTA_DE_LA_MUERTE'
+
+    # Anti doble-disparo del mismo clic/skill. No es cooldown de gameplay.
+    use-lock-ms: 750
+
+    # Ventana para asociar el clic del MMOItem con el comando de consola.
+    # Permite detectar si MMOItems descontó el item antes del comando y devolverlo
+    # automáticamente si el graveback falla.
+    pending-use-max-age-ms: 2000
+
+    # Vacío = sin sonido.
+    sound: 'entity.enderman.teleport'
+
+  private-graves:
+    enabled: true
+
+    # Las bolsas creadas por jugadores con mdvgraves.private
+    # tampoco se rompen mediante explosiones.
+    protect-from-explosions: true
+
+  keep-inventory:
+    enabled: true
+
+inventory:
+  title: '&8Bolsa perdida de &e{owner}'
+  # Debe ser múltiplo de 9, entre 9 y 54. Si hay más objetos, se ajusta hasta 54.
+  minimum-size: 27
+
+textures:
+  # Se evalúan de arriba hacia abajo. La primera permission que cumpla gana.
+  ranks:
+    admin:
+      permission: 'mdvgraves.texture.admin'
+      texture: ''
+    vip:
+      permission: 'mdvgraves.texture.vip'
+      texture: ''
+
+  # Base64 completo de textures.minecraft.net. Vacío = cabeza de jugador normal.
+  default: ''
+
+messages:
+  prefix: '&6&l[&5&lMDVCRAFT&6&l]&4> &r'
+  grave-created: '&eTus pertenencias quedaron guardadas en una bolsa. &7X:&f{x} &7Y:&f{y} &7Z:&f{z}'
+  grave-opened: '&eHas abierto la bolsa perdida de &f{owner}&e.'
+  grave-busy: '&cOtra persona está revisando esta bolsa.'
+  grave-in-use-break: '&cNo puedes romper esta bolsa mientras alguien está revisándola.'
+  grave-forced-closed: '&cLa bolsa fue alterada externamente. Se cerró para proteger su contenido.'
+  not-owner: '&cEsta bolsa no te pertenece.'
+  grave-expired-owner: '&7Una de tus bolsas perdidas se ha desvanecido.'
+  grave-broken: '&eLa bolsa se rompió y sus pertenencias cayeron al suelo.'
+  grave-empty-removed: '&7La bolsa vacía se ha desvanecido.'
+  reload: '&aMDVGraves recargado.'
+  cleanup: '&aLimpieza ejecutada. Bolsas expiradas eliminadas: &e{count}&a.'
+  delete-all-confirm: '&cEsto eliminará definitivamente las &e{count} &cbolsas y todo su contenido. Usa &e/mdvgraves deleteall confirm &cpara confirmar.'
+  delete-all-done: '&aSe eliminaron definitivamente &e{count} &abolsas.'
+  delete-all-error: '&cNo se pudieron eliminar todas las bolsas. Revisa la consola.'
+  no-permission: '&cNo tienes permiso.'
+  players-only: '&cEste comando solo puede usarlo un jugador.'
+  grave-private: '&cLa bolsa de &f{owner} &cestá protegida y no puedes abrirla ni romperla.'
+  keep-inventory: '&aHas conservado tu inventario y no se creó ninguna bolsa.'
+  back-disabled: '&cEl regreso a bolsas está desactivado.'
+  back-no-graves: '&cNo tienes ninguna bolsa activa a la que regresar.'
+  back-cooldown: '&cDebes esperar &e{seconds} segundos &cpara volver a usar este comando.'
+  back-world-unavailable: '&cEl mundo &e{world} &cno está disponible.'
+  back-no-safe-location: '&cNo se encontró un lugar seguro cerca de tu bolsa en &e{world} &7({x}, {y}, {z})&c.'
+  back-teleport-failed: '&cNo fue posible teletransportarte a tu bolsa.'
+  back-teleported: '&aHas regresado a tu última bolsa. &7{world} &f({x}, {y}, {z})'
+  player-not-found: '&cEl jugador &e{player} &cno está conectado.'
+  back-other-success: '&aHas enviado a &e{player} &aa su última bolsa.'
+  back-other-failed: '&cNo se pudo enviar a &e{player} &ca su última bolsa.'
+  death-fruit-console-only: '&cEl comando de la Fruta de la Muerte solo puede ejecutarse desde consola.'
+  death-fruit-not-held: '&cDebes tener la Fruta de la Muerte en la mano para usarla.'
+  death-fruit-no-graves: '&cNo tienes ninguna tumba activa a la que regresar. &7La fruta no fue consumida.'
+  death-fruit-failed: '&cLa Fruta de la Muerte no pudo encontrar un camino hacia tus restos. &7No fue consumida.'
+  death-fruit-success: '&5La Fruta de la Muerte te arrastra hacia tus últimos restos...'

@@ -6,7 +6,6 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.Skull;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.data.BlockData;
-import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
@@ -20,7 +19,6 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
@@ -35,6 +33,8 @@ import org.bukkit.profile.PlayerTextures;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.io.BukkitObjectInputStream;
 import org.bukkit.util.io.BukkitObjectOutputStream;
+
+import xyz.mdvcraft.mdvgraves.commands.Commands;
 
 import java.io.*;
 import java.lang.reflect.Method;
@@ -55,23 +55,33 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             "WEEPING_VINES_PLANT", "TWISTING_VINES", "TWISTING_VINES_PLANT",
             "SEAGRASS", "TALL_SEAGRASS", "KELP", "KELP_PLANT", "GLOW_LICHEN",
             "HANGING_ROOTS", "NETHER_SPROUTS", "CRIMSON_ROOTS", "WARPED_ROOTS",
-            "WHEAT", "CARROTS", "POTATOES", "BEETROOTS", "NETHER_WART", "COCOA",
-            "MELON_STEM", "PUMPKIN_STEM", "ATTACHED_MELON_STEM",
-            "ATTACHED_PUMPKIN_STEM", "SWEET_BERRY_BUSH", "TORCHFLOWER_CROP",
-            "PITCHER_CROP", "BAMBOO_SAPLING", "LILY_PAD", "PINK_PETALS",
-            "WILDFLOWERS", "LEAF_LITTER", "BUSH", "FIREFLY_BUSH", "SHORT_DRY_GRASS",
+
+            // Crops
+            "WHEAT", "CARROTS", "POTATOES", "BEETROOTS", "NETHER_WART",
+            "COCOA", "MELON_STEM", "PUMPKIN_STEM",
+            "ATTACHED_MELON_STEM", "ATTACHED_PUMPKIN_STEM",
+            "SWEET_BERRY_BUSH", "TORCHFLOWER_CROP", "PITCHER_CROP",
+
+            // Other plant-like blocks
+            "BAMBOO_SAPLING", "LILY_PAD", "PINK_PETALS", "WILDFLOWERS",
+            "LEAF_LITTER", "BUSH", "FIREFLY_BUSH", "SHORT_DRY_GRASS",
             "TALL_DRY_GRASS", "PALE_HANGING_MOSS", "PALE_MOSS_CARPET",
-            "MOSS_CARPET", "SCULK_VEIN", "COBWEB", "DANDELION", "POPPY",
-            "BLUE_ORCHID", "ALLIUM", "AZURE_BLUET", "OXEYE_DAISY", "CORNFLOWER",
-            "LILY_OF_THE_VALLEY", "WITHER_ROSE", "TORCHFLOWER", "OPEN_EYEBLOSSOM",
-            "CLOSED_EYEBLOSSOM", "SPORE_BLOSSOM", "SMALL_DRIPLEAF"
-    );
+            "MOSS_CARPET", "SCULK_VEIN", "COBWEB",
+
+            // Flowers
+            "DANDELION", "POPPY", "BLUE_ORCHID", "ALLIUM", "AZURE_BLUET",
+            "OXEYE_DAISY", "CORNFLOWER", "LILY_OF_THE_VALLEY", "WITHER_ROSE",
+            "TORCHFLOWER", "OPEN_EYEBLOSSOM", "CLOSED_EYEBLOSSOM",
+            "SPORE_BLOSSOM", "SMALL_DRIPLEAF");
+
     private NamespacedKey graveKey;
     private Connection connection;
     private final Map<UUID, GraveMeta> graves = new ConcurrentHashMap<>();
     private final Map<BlockKey, UUID> gravesByBlock = new ConcurrentHashMap<>();
-    // Cada bolsa abierta utiliza un único inventario canónico compartido. Incluso si
-    // single-viewer-lock se desactiva, nunca se crean dos copias visuales del mismo loot.
+    // Cada bolsa abierta utiliza un único inventario canónico compartido. Incluso
+    // si
+    // single-viewer-lock se desactiva, nunca se crean dos copias visuales del mismo
+    // loot.
     private final Map<UUID, Set<UUID>> activeViewers = new HashMap<>();
     private final Map<UUID, Inventory> openGraveInventories = new HashMap<>();
     private final Set<UUID> forcedClosingGraves = new HashSet<>();
@@ -101,6 +111,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return;
         }
         getServer().getPluginManager().registerEvents(this, this);
+        Commands commands = new Commands(this);
+
+        getServer().getPluginManager().registerEvents(commands, this);
+        Objects.requireNonNull(getCommand("mdvgraves")).setExecutor(commands);
+        Objects.requireNonNull(getCommand("mdvgraves")).setTabCompleter(commands);
+        Objects.requireNonNull(getCommand("graveback")).setExecutor(commands);
+        Objects.requireNonNull(getCommand("graveback")).setTabCompleter(commands);
         setupMmoItemsBridge();
         scheduleCleanup();
         scheduleOpenGraveIntegrityGuard();
@@ -109,9 +126,12 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
-        if (cleanupTask != null) cleanupTask.cancel();
-        if (integrityTask != null) integrityTask.cancel();
-        // Cada bolsa abierta posee un único inventario canónico. Se persiste una sola vez,
+        if (cleanupTask != null)
+            cleanupTask.cancel();
+        if (integrityTask != null)
+            integrityTask.cancel();
+        // Cada bolsa abierta posee un único inventario canónico. Se persiste una sola
+        // vez,
         // aunque más de un jugador la estuviera observando.
         for (Map.Entry<UUID, Inventory> entry : new ArrayList<>(openGraveInventories.entrySet())) {
             saveInventoryAndMaybeRemove(entry.getKey(), entry.getValue(), false);
@@ -122,8 +142,25 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         deathFruitUseLocks.clear();
         pendingDeathFruitUses.clear();
         try {
-            if (connection != null && !connection.isClosed()) connection.close();
-        } catch (SQLException ignored) { }
+            if (connection != null && !connection.isClosed())
+                connection.close();
+        } catch (SQLException ignored) {
+        }
+    }
+
+    public void reloadPlugin() {
+        reloadConfig();
+        setupMmoItemsBridge();
+        scheduleCleanup();
+        scheduleOpenGraveIntegrityGuard();
+    }
+
+    public int getActiveGraveCount() {
+        return graves.size();
+    }
+
+    public void logCommandFailure(String message, Exception exception) {
+        getLogger().log(Level.SEVERE, message, exception);
     }
 
     private void openDatabase() throws Exception {
@@ -145,26 +182,27 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private void createSchema() throws SQLException {
         try (Statement st = connection.createStatement()) {
             st.executeUpdate("""
-                CREATE TABLE IF NOT EXISTS graves (
-                  grave_id TEXT PRIMARY KEY,
-                  owner_uuid TEXT NOT NULL,
-                  owner_name TEXT NOT NULL,
-                  world TEXT NOT NULL,
-                  x INTEGER NOT NULL,
-                  y INTEGER NOT NULL,
-                  z INTEGER NOT NULL,
-                  created_at INTEGER NOT NULL,
-                  first_opened_at INTEGER,
-                  expires_at INTEGER NOT NULL,
-                  items BLOB NOT NULL,
-                  owner_protected INTEGER NOT NULL DEFAULT 0
-                )
-                """);
+                    CREATE TABLE IF NOT EXISTS graves (
+                      grave_id TEXT PRIMARY KEY,
+                      owner_uuid TEXT NOT NULL,
+                      owner_name TEXT NOT NULL,
+                      world TEXT NOT NULL,
+                      x INTEGER NOT NULL,
+                      y INTEGER NOT NULL,
+                      z INTEGER NOT NULL,
+                      created_at INTEGER NOT NULL,
+                      first_opened_at INTEGER,
+                      expires_at INTEGER NOT NULL,
+                      items BLOB NOT NULL,
+                      owner_protected INTEGER NOT NULL DEFAULT 0
+                    )
+                    """);
             try {
                 st.executeUpdate("ALTER TABLE graves ADD COLUMN owner_protected INTEGER NOT NULL DEFAULT 0");
             } catch (SQLException ex) {
                 String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
-                if (!message.contains("duplicate column")) throw ex;
+                if (!message.contains("duplicate column"))
+                    throw ex;
             }
             st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_graves_expires ON graves(expires_at)");
             st.executeUpdate("CREATE UNIQUE INDEX IF NOT EXISTS idx_graves_location ON graves(world,x,y,z)");
@@ -188,7 +226,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onDeath(PlayerDeathEvent event) {
-        if (!getConfig().getBoolean("settings.enabled", true)) return;
+        if (!getConfig().getBoolean("settings.enabled", true))
+            return;
         Player player = event.getEntity();
 
         if (getConfig().getBoolean("utilities.keep-inventory.enabled", true)
@@ -199,19 +238,23 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             return;
         }
 
-        if (!enabledWorld(player.getWorld().getName())) return;
-        if (event.getKeepInventory() || event.getDrops().isEmpty()) return;
+        if (!enabledWorld(player.getWorld().getName()))
+            return;
+        if (event.getKeepInventory() || event.getDrops().isEmpty())
+            return;
 
         List<ItemStack> drops = event.getDrops().stream()
                 .filter(Objects::nonNull)
                 .filter(item -> !item.getType().isAir())
                 .map(ItemStack::clone)
                 .toList();
-        if (drops.isEmpty()) return;
+        if (drops.isEmpty())
+            return;
 
         Block target = findPlacementBlock(player.getLocation());
         if (target == null) {
-            getLogger().warning("No se encontró espacio seguro para la bolsa de " + player.getName() + ". Se conservaron drops vanilla.");
+            getLogger().warning("No se encontró espacio seguro para la bolsa de " + player.getName()
+                    + ". Se conservaron drops vanilla.");
             return;
         }
 
@@ -232,13 +275,16 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             gravesByBlock.put(meta.blockKey(), id);
             event.getDrops().clear();
             send(player, "messages.grave-created", Map.of(
-                    "x", Integer.toString(target.getX()), "y", Integer.toString(target.getY()), "z", Integer.toString(target.getZ()),
+                    "x", Integer.toString(target.getX()), "y", Integer.toString(target.getY()), "z",
+                    Integer.toString(target.getZ()),
                     "owner", player.getName()));
         } catch (Exception ex) {
             // Rollback visual: nunca quitamos drops si la persistencia falló.
-            if (isOurHead(target, id)) target.setType(Material.AIR, false);
+            if (isOurHead(target, id))
+                target.setType(Material.AIR, false);
             rollbackSupportPatch(supportPatch);
-            getLogger().log(Level.SEVERE, "No se pudo crear la bolsa de " + player.getName() + ". Se conservaron drops vanilla.", ex);
+            getLogger().log(Level.SEVERE,
+                    "No se pudo crear la bolsa de " + player.getName() + ". Se conservaron drops vanilla.", ex);
         }
     }
 
@@ -250,11 +296,15 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = false)
     public void onDeathFruitUseStart(PlayerInteractEvent event) {
-        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return;
-        if (event.getHand() == null) return;
-        if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK) return;
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true))
+            return;
+        if (event.getHand() == null)
+            return;
+        if (event.getAction() != Action.RIGHT_CLICK_AIR && event.getAction() != Action.RIGHT_CLICK_BLOCK)
+            return;
         ItemStack item = event.getItem();
-        if (!isConfiguredDeathFruit(item)) return;
+        if (!isConfiguredDeathFruit(item))
+            return;
 
         pendingDeathFruitUses.put(event.getPlayer().getUniqueId(),
                 new PendingDeathFruitUse(event.getHand(), item.clone(), item.getAmount(), System.currentTimeMillis()));
@@ -262,12 +312,16 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInteract(PlayerInteractEvent event) {
-        // Bukkit dispara PlayerInteractEvent una vez por cada mano. Solo procesamos la principal
+        // Bukkit dispara PlayerInteractEvent una vez por cada mano. Solo procesamos la
+        // principal
         // para evitar abrir la misma bolsa y enviar mensajes dos veces.
-        if (event.getHand() != EquipmentSlot.HAND) return;
-        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) return;
+        if (event.getHand() != EquipmentSlot.HAND)
+            return;
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null)
+            return;
         UUID id = physicalGraveId(event.getClickedBlock());
-        if (id == null) return;
+        if (id == null)
+            return;
         event.setCancelled(true);
 
         GraveMeta meta = graves.get(id);
@@ -299,7 +353,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                 GraveHolder holder = new GraveHolder(id);
                 inventory = Bukkit.createInventory(holder, size, title);
                 holder.inventory = inventory;
-                for (ItemStack item : items) inventory.addItem(item.clone());
+                for (ItemStack item : items)
+                    inventory.addItem(item.clone());
                 openGraveInventories.put(id, inventory);
             }
 
@@ -319,7 +374,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getInventory().getHolder() instanceof GraveHolder holder)) return;
+        if (!(event.getInventory().getHolder() instanceof GraveHolder holder))
+            return;
         UUID id = holder.graveId();
         GraveMeta meta = graves.get(id);
         Block physicalBlock = loadedGraveBlock(meta);
@@ -328,14 +384,17 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         Set<UUID> viewers = activeViewers.get(id);
         if (viewers != null) {
             viewers.remove(event.getPlayer().getUniqueId());
-            if (viewers.isEmpty()) activeViewers.remove(id);
+            if (viewers.isEmpty())
+                activeViewers.remove(id);
         }
 
         // Los cierres forzados persisten el inventario exactamente una vez desde
         // closeAllViewersAndPersist(), no una vez por cada espectador.
-        if (forcedClosingGraves.contains(id)) return;
+        if (forcedClosingGraves.contains(id))
+            return;
         if (isBeingViewed(id)) {
-            if (physicalMissing) verifyOpenGraveNextTick(id);
+            if (physicalMissing)
+                verifyOpenGraveNextTick(id);
             return;
         }
 
@@ -351,7 +410,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private void saveInventoryAndMaybeRemove(UUID id, Inventory inventory, boolean notify) {
         GraveMeta meta = graves.get(id);
-        if (meta == null) return;
+        if (meta == null)
+            return;
         List<ItemStack> remaining = Arrays.stream(inventory.getStorageContents())
                 .filter(Objects::nonNull).filter(i -> !i.getType().isAir()).map(ItemStack::clone).toList();
         try {
@@ -359,7 +419,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                 removeGrave(id, false, List.of());
                 if (notify && inventory.getViewers().isEmpty()) {
                     Player owner = Bukkit.getPlayer(meta.ownerUuid());
-                    if (owner != null) send(owner, "messages.grave-empty-removed", Map.of("owner", meta.ownerName()));
+                    if (owner != null)
+                        send(owner, "messages.grave-empty-removed", Map.of("owner", meta.ownerName()));
                 }
             } else {
                 updateItems(id, serializeItems(remaining));
@@ -372,12 +433,14 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onBreak(BlockBreakEvent event) {
         UUID id = trackedGraveId(event.getBlock());
-        if (id == null) return;
+        if (id == null)
+            return;
         event.setCancelled(true);
         event.setDropItems(false);
 
         GraveMeta meta = graves.get(id);
-        if (meta == null) return;
+        if (meta == null)
+            return;
         if (isBeingViewed(id)) {
             send(event.getPlayer(), "messages.grave-in-use-break", Map.of("owner", meta.ownerName()));
             verifyOpenGraveNextTick(id);
@@ -393,17 +456,22 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private void breakGrave(Player breaker, UUID id) {
         GraveMeta meta = graves.get(id);
-        if (meta == null) return;
-        // Regla anti-duplicación: una bolsa abierta nunca entra en la ruta de borrado/drop.
+        if (meta == null)
+            return;
+        // Regla anti-duplicación: una bolsa abierta nunca entra en la ruta de
+        // borrado/drop.
         if (isBeingViewed(id)) {
-            if (breaker != null) send(breaker, "messages.grave-in-use-break", Map.of("owner", meta.ownerName()));
+            if (breaker != null)
+                send(breaker, "messages.grave-in-use-break", Map.of("owner", meta.ownerName()));
             verifyOpenGraveNextTick(id);
             return;
         }
         try {
-            List<ItemStack> items = getConfig().getBoolean("settings.break-drops-items", true) ? loadItems(id) : List.of();
+            List<ItemStack> items = getConfig().getBoolean("settings.break-drops-items", true) ? loadItems(id)
+                    : List.of();
             removeGrave(id, true, items);
-            if (breaker != null) send(breaker, "messages.grave-broken", Map.of("owner", meta.ownerName()));
+            if (breaker != null)
+                send(breaker, "messages.grave-broken", Map.of("owner", meta.ownerName()));
         } catch (Exception ex) {
             getLogger().log(Level.SEVERE, "No se pudo romper correctamente la bolsa " + id, ex);
         }
@@ -429,7 +497,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         Set<UUID> graveIds = new LinkedHashSet<>();
         affectedBlocks.removeIf(block -> {
             UUID id = trackedGraveId(block);
-            if (id == null) return false;
+            if (id == null)
+                return false;
             if (isBeingViewed(id)) {
                 verifyOpenGraveNextTick(id);
                 return true;
@@ -440,11 +509,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             graveIds.add(id);
-            // Se quita de la lista vanilla: MDVGraves hace una única eliminación transaccional
+            // Se quita de la lista vanilla: MDVGraves hace una única eliminación
+            // transaccional
             // y suelta exactamente el inventario persistido, no una cabeza adicional.
             return true;
         });
-        for (UUID id : graveIds) breakGrave(null, id);
+        for (UUID id : graveIds)
+            breakGrave(null, id);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -453,7 +524,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         UUID id = trackedGraveId(event.getToBlock());
         if (id != null && (isBeingViewed(id) || getConfig().getBoolean("settings.protect-from-fluids", true))) {
             event.setCancelled(true);
-            if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+            if (isBeingViewed(id))
+                verifyOpenGraveNextTick(id);
         }
     }
 
@@ -464,7 +536,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         boolean containsGrave = event.getBlocks().stream().anyMatch(block -> trackedGraveId(block) != null);
         if (openId != null || (getConfig().getBoolean("settings.protect-from-pistons", true) && containsGrave)) {
             event.setCancelled(true);
-            if (openId != null) verifyOpenGraveNextTick(openId);
+            if (openId != null)
+                verifyOpenGraveNextTick(openId);
         }
     }
 
@@ -475,7 +548,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         boolean containsGrave = event.getBlocks().stream().anyMatch(block -> trackedGraveId(block) != null);
         if (openId != null || (getConfig().getBoolean("settings.protect-from-pistons", true) && containsGrave)) {
             event.setCancelled(true);
-            if (openId != null) verifyOpenGraveNextTick(openId);
+            if (openId != null)
+                verifyOpenGraveNextTick(openId);
         }
     }
 
@@ -492,36 +566,45 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onPhysics(BlockPhysicsEvent event) {
         UUID id = trackedGraveId(event.getBlock());
-        if (id == null) return;
+        if (id == null)
+            return;
         event.setCancelled(true);
-        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+        if (isBeingViewed(id))
+            verifyOpenGraveNextTick(id);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onEntityChangeBlock(EntityChangeBlockEvent event) {
         UUID id = trackedGraveId(event.getBlock());
-        if (id == null) return;
+        if (id == null)
+            return;
         event.setCancelled(true);
-        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+        if (isBeingViewed(id))
+            verifyOpenGraveNextTick(id);
     }
 
     private void protectTrackedGraveBlock(Block block, Cancellable event) {
         UUID id = trackedGraveId(block);
-        if (id == null) return;
+        if (id == null)
+            return;
         event.setCancelled(true);
-        if (isBeingViewed(id)) verifyOpenGraveNextTick(id);
+        if (isBeingViewed(id))
+            verifyOpenGraveNextTick(id);
     }
 
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
         // Limpia cabezas huérfanas sin forzar la carga de chunks durante cleanup.
         for (BlockState state : event.getChunk().getTileEntities()) {
-            if (!(state instanceof Skull skull)) continue;
+            if (!(state instanceof Skull skull))
+                continue;
             String raw = skull.getPersistentDataContainer().get(graveKey, PersistentDataType.STRING);
-            if (raw == null) continue;
+            if (raw == null)
+                continue;
             try {
                 UUID id = UUID.fromString(raw);
-                if (!graves.containsKey(id)) skull.getBlock().setType(Material.AIR, false);
+                if (!graves.containsKey(id))
+                    skull.getBlock().setType(Material.AIR, false);
             } catch (IllegalArgumentException ex) {
                 skull.getBlock().setType(Material.AIR, false);
             }
@@ -529,7 +612,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private void scheduleOpenGraveIntegrityGuard() {
-        if (integrityTask != null) integrityTask.cancel();
+        if (integrityTask != null)
+            integrityTask.cancel();
         long ticks = Math.max(1L, getConfig().getLong("settings.open-grave-integrity-check-ticks", 2L));
         integrityTask = Bukkit.getScheduler().runTaskTimer(this, this::verifyAllOpenGraves, ticks, ticks);
     }
@@ -537,7 +621,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private void verifyAllOpenGraves() {
         for (UUID id : new ArrayList<>(activeViewers.keySet())) {
             pruneInactiveViewers(id);
-            if (!isBeingViewed(id)) continue;
+            if (!isBeingViewed(id))
+                continue;
             verifyOpenGraveIntegrity(id);
         }
     }
@@ -547,28 +632,34 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private void verifyOpenGraveIntegrity(UUID id) {
-        if (!isBeingViewed(id)) return;
+        if (!isBeingViewed(id))
+            return;
         GraveMeta meta = graves.get(id);
         if (meta == null) {
             closeAllViewersAndPersist(id, false);
             return;
         }
         World world = Bukkit.getWorld(meta.world());
-        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) return;
+        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4))
+            return;
         Block block = world.getBlockAt(meta.x(), meta.y(), meta.z());
-        if (isOurHead(block, id)) return;
+        if (isOurHead(block, id))
+            return;
 
         getLogger().warning("La bolsa " + id + " fue alterada mientras estaba abierta. "
                 + "Se cerrarán sus visores y se restaurará el bloque sin generar drops.");
         closeAllViewersAndPersist(id, true);
-        if (!graves.containsKey(id)) return; // Quedó vacía y fue retirada normalmente.
+        if (!graves.containsKey(id))
+            return; // Quedó vacía y fue retirada normalmente.
         restoreGraveHead(block, meta);
     }
 
     private Block loadedGraveBlock(GraveMeta meta) {
-        if (meta == null) return null;
+        if (meta == null)
+            return null;
         World world = Bukkit.getWorld(meta.world());
-        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) return null;
+        if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4))
+            return null;
         return world.getBlockAt(meta.x(), meta.y(), meta.z());
     }
 
@@ -593,14 +684,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         try {
             for (UUID viewerId : viewers) {
                 Player viewer = Bukkit.getPlayer(viewerId);
-                if (viewer == null) continue;
-                if (notify) send(viewer, "messages.grave-forced-closed", Map.of());
+                if (viewer == null)
+                    continue;
+                if (notify)
+                    send(viewer, "messages.grave-forced-closed", Map.of());
                 if (viewer.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder holder
-                        && holder.graveId().equals(id)) viewer.closeInventory();
+                        && holder.graveId().equals(id))
+                    viewer.closeInventory();
             }
             activeViewers.remove(id);
             openGraveInventories.remove(id);
-            if (inventory != null) saveInventoryAndMaybeRemove(id, inventory, false);
+            if (inventory != null)
+                saveInventoryAndMaybeRemove(id, inventory, false);
         } finally {
             forcedClosingGraves.remove(id);
         }
@@ -614,34 +709,42 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private void pruneInactiveViewers(UUID id) {
         Set<UUID> viewers = activeViewers.get(id);
-        if (viewers == null) return;
+        if (viewers == null)
+            return;
         viewers.removeIf(viewerId -> {
             Player player = Bukkit.getPlayer(viewerId);
-            if (player == null) return true;
+            if (player == null)
+                return true;
             Inventory top = player.getOpenInventory().getTopInventory();
             return !(top.getHolder() instanceof GraveHolder holder) || !holder.graveId().equals(id);
         });
-        if (viewers.isEmpty()) activeViewers.remove(id);
+        if (viewers.isEmpty())
+            activeViewers.remove(id);
     }
 
     private void scheduleCleanup() {
-        if (cleanupTask != null) cleanupTask.cancel();
+        if (cleanupTask != null)
+            cleanupTask.cancel();
         long seconds = Math.max(60L, getConfig().getLong("settings.cleanup-interval-seconds", 300L));
-        cleanupTask = Bukkit.getScheduler().runTaskTimer(this, () -> cleanupExpired(false), seconds * 20L, seconds * 20L);
+        cleanupTask = Bukkit.getScheduler().runTaskTimer(this, () -> cleanupExpired(false), seconds * 20L,
+                seconds * 20L);
     }
 
-    private int cleanupExpired(boolean manual) {
+    public int cleanupExpired(boolean manual) {
         long now = Instant.now().getEpochSecond();
         List<UUID> expired = graves.values().stream().filter(g -> g.expiresAt() <= now).map(GraveMeta::id).toList();
         int removed = 0;
         for (UUID id : expired) {
-            if (isBeingViewed(id)) continue;
+            if (isBeingViewed(id))
+                continue;
             GraveMeta meta = graves.get(id);
-            if (meta == null) continue;
+            if (meta == null)
+                continue;
             try {
                 removeGrave(id, false, List.of());
                 Player owner = Bukkit.getPlayer(meta.ownerUuid());
-                if (owner != null) send(owner, "messages.grave-expired-owner", Map.of("owner", meta.ownerName()));
+                if (owner != null)
+                    send(owner, "messages.grave-expired-owner", Map.of("owner", meta.ownerName()));
                 removed++;
             } catch (Exception ex) {
                 getLogger().log(Level.WARNING, "No se pudo limpiar la bolsa " + id, ex);
@@ -652,11 +755,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
 
     private void removeGrave(UUID id, boolean dropItems, List<ItemStack> items) throws SQLException {
         GraveMeta meta = graves.get(id);
-        if (meta == null) return;
+        if (meta == null)
+            return;
         // DB primero: si falla, no dropea ni borra bloque, evitando duplicación.
         try (PreparedStatement ps = connection.prepareStatement("DELETE FROM graves WHERE grave_id=?")) {
             ps.setString(1, id.toString());
-            if (ps.executeUpdate() == 0) return;
+            if (ps.executeUpdate() == 0)
+                return;
         }
         graves.remove(id);
         gravesByBlock.remove(meta.blockKey());
@@ -667,19 +772,23 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         World world = Bukkit.getWorld(meta.world());
         if (world != null && world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) {
             Block block = world.getBlockAt(meta.x(), meta.y(), meta.z());
-            if (isOurHead(block, id)) block.setType(Material.AIR, false);
+            if (isOurHead(block, id))
+                block.setType(Material.AIR, false);
             if (dropItems) {
                 Location dropAt = new Location(world, meta.x() + 0.5, meta.y() + 0.3, meta.z() + 0.5);
-                for (ItemStack item : items) world.dropItemNaturally(dropAt, item.clone());
+                for (ItemStack item : items)
+                    world.dropItemNaturally(dropAt, item.clone());
             }
         }
     }
 
     private void markFirstOpened(GraveMeta meta) throws SQLException {
-        if (meta.firstOpenedAt() != null) return;
+        if (meta.firstOpenedAt() != null)
+            return;
         long opened = Instant.now().getEpochSecond();
         long expires = opened + Math.max(1L, getConfig().getLong("settings.opened-expire-minutes", 20L)) * 60L;
-        try (PreparedStatement ps = connection.prepareStatement("UPDATE graves SET first_opened_at=?, expires_at=? WHERE grave_id=?")) {
+        try (PreparedStatement ps = connection
+                .prepareStatement("UPDATE graves SET first_opened_at=?, expires_at=? WHERE grave_id=?")) {
             ps.setLong(1, opened);
             ps.setLong(2, expires);
             ps.setString(3, meta.id().toString());
@@ -690,15 +799,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private void insertGrave(GraveMeta meta, byte[] items) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement("""
-            INSERT INTO graves(grave_id,owner_uuid,owner_name,world,x,y,z,created_at,first_opened_at,expires_at,items,owner_protected)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-            """)) {
+        try (PreparedStatement ps = connection.prepareStatement(
+                """
+                        INSERT INTO graves(grave_id,owner_uuid,owner_name,world,x,y,z,created_at,first_opened_at,expires_at,items,owner_protected)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                        """)) {
             ps.setString(1, meta.id().toString());
             ps.setString(2, meta.ownerUuid().toString());
             ps.setString(3, meta.ownerName());
             ps.setString(4, meta.world());
-            ps.setInt(5, meta.x()); ps.setInt(6, meta.y()); ps.setInt(7, meta.z());
+            ps.setInt(5, meta.x());
+            ps.setInt(6, meta.y());
+            ps.setInt(7, meta.z());
             ps.setLong(8, meta.createdAt());
             ps.setNull(9, Types.BIGINT);
             ps.setLong(10, meta.expiresAt());
@@ -720,7 +832,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         try (PreparedStatement ps = connection.prepareStatement("SELECT items FROM graves WHERE grave_id=?")) {
             ps.setString(1, id.toString());
             try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return List.of();
+                if (!rs.next())
+                    return List.of();
                 return deserializeItems(rs.getBytes(1));
             }
         }
@@ -729,19 +842,23 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private byte[] serializeItems(List<ItemStack> items) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(bytes);
-             BukkitObjectOutputStream out = new BukkitObjectOutputStream(gzip)) {
+                BukkitObjectOutputStream out = new BukkitObjectOutputStream(gzip)) {
             out.writeInt(items.size());
-            for (ItemStack item : items) out.writeObject(item);
+            for (ItemStack item : items)
+                out.writeObject(item);
         }
         return bytes.toByteArray();
     }
 
     private List<ItemStack> deserializeItems(byte[] data) throws IOException, ClassNotFoundException {
-        if (data == null || data.length == 0) return List.of();
-        try (BukkitObjectInputStream in = new BukkitObjectInputStream(new GZIPInputStream(new ByteArrayInputStream(data)))) {
+        if (data == null || data.length == 0)
+            return List.of();
+        try (BukkitObjectInputStream in = new BukkitObjectInputStream(
+                new GZIPInputStream(new ByteArrayInputStream(data)))) {
             int size = in.readInt();
             List<ItemStack> items = new ArrayList<>(size);
-            for (int i = 0; i < size; i++) items.add((ItemStack) in.readObject());
+            for (int i = 0; i < size; i++)
+                items.add((ItemStack) in.readObject());
             return items;
         }
     }
@@ -770,13 +887,15 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                     profile = owner.getPlayerProfile().clone();
                 }
             } else {
-                getLogger().warning("No se encontró una URL textures.minecraft.net en la textura Base64; se usará la cabeza del jugador.");
+                getLogger().warning(
+                        "No se encontró una URL textures.minecraft.net en la textura Base64; se usará la cabeza del jugador.");
                 profile = owner.getPlayerProfile().clone();
             }
         } else {
             profile = owner.getPlayerProfile().clone();
         }
-        // API Bukkit compatible con Paper/Purpur 1.21.6; evita mezclar los dos PlayerProfile de Paper.
+        // API Bukkit compatible con Paper/Purpur 1.21.6; evita mezclar los dos
+        // PlayerProfile de Paper.
         skull.setOwnerProfile(profile);
     }
 
@@ -784,11 +903,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         try {
             String json = new String(Base64.getDecoder().decode(base64Texture), StandardCharsets.UTF_8);
             int key = json.indexOf("\"url\"");
-            if (key < 0) return null;
+            if (key < 0)
+                return null;
             int colon = json.indexOf(':', key);
             int firstQuote = json.indexOf('\"', colon + 1);
             int secondQuote = json.indexOf('\"', firstQuote + 1);
-            if (colon < 0 || firstQuote < 0 || secondQuote < 0) return null;
+            if (colon < 0 || firstQuote < 0 || secondQuote < 0)
+                return null;
             return json.substring(firstQuote + 1, secondQuote).replace("\\/", "/");
         } catch (IllegalArgumentException ex) {
             return null;
@@ -801,7 +922,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             for (String key : ranks.getKeys(false)) {
                 String permission = ranks.getString(key + ".permission", "");
                 String texture = ranks.getString(key + ".texture", "");
-                if (!permission.isBlank() && player.hasPermission(permission) && !texture.isBlank()) return texture;
+                if (!permission.isBlank() && player.hasPermission(permission) && !texture.isBlank())
+                    return texture;
             }
         }
         return getConfig().getString("textures.default", "");
@@ -820,9 +942,11 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         for (int r = 0; r <= radius; r++) {
             for (int dx = -r; dx <= r; dx++) {
                 for (int dz = -r; dz <= r; dz++) {
-                    if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r) continue;
+                    if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r)
+                        continue;
                     Block target = findFirstSurfaceAbove(world, baseX + dx, startY, baseZ + dz);
-                    if (target != null) return target;
+                    if (target != null)
+                        return target;
                 }
             }
         }
@@ -836,9 +960,12 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
      */
     private Block findFirstSurfaceAbove(World world, int x, int startY, int z) {
         int minY = world.getMinHeight();
-        for (int y = startY; y > minY; y--) {
+        int realStartY = Math.max(startY + 1, world.getMaxHeight());
+
+        for (int y = realStartY; y > minY; y--) {
             Block support = world.getBlockAt(x, y - 1, z);
-            if (canReplace(support)) continue;
+            if (canReplace(support))
+                continue;
 
             Block target = world.getBlockAt(x, y, z);
             return canReplace(target) ? target : null;
@@ -846,23 +973,27 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         return null;
     }
 
-
     /**
      * Algunos bloques de suelo parcial (por ejemplo DIRT_PATH y FARMLAND) no son un
      * soporte estable para una PLAYER_HEAD de suelo. La corrección solo se evalúa
-     * cuando realmente va a crearse una tumba, por lo que no añade tareas periódicas.
+     * cuando realmente va a crearse una tumba, por lo que no añade tareas
+     * periódicas.
      *
      * Los reemplazos son configurables. Si la creación de la tumba falla, el bloque
      * original se restaura para no modificar el mapa por un error de persistencia.
      */
     private SupportPatch stabilizePlacementSupport(Block target) {
-        if (!getConfig().getBoolean("settings.placement-support-fixes.enabled", true)) return null;
+        if (!getConfig().getBoolean("settings.placement-support-fixes.enabled", true))
+            return null;
         Block support = target.getRelative(BlockFace.DOWN);
-        ConfigurationSection replacements = getConfig().getConfigurationSection("settings.placement-support-fixes.replacements");
-        if (replacements == null) return null;
+        ConfigurationSection replacements = getConfig()
+                .getConfigurationSection("settings.placement-support-fixes.replacements");
+        if (replacements == null)
+            return null;
 
         String configured = replacements.getString(support.getType().name());
-        if (configured == null || configured.isBlank()) return null;
+        if (configured == null || configured.isBlank())
+            return null;
 
         Material replacement = Material.matchMaterial(configured.trim());
         if (replacement == null || replacement.isAir() || !replacement.isBlock()) {
@@ -877,7 +1008,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private void rollbackSupportPatch(SupportPatch patch) {
-        if (patch == null) return;
+        if (patch == null)
+            return;
         try {
             patch.block().setBlockData(patch.original(), false);
         } catch (Exception ex) {
@@ -888,8 +1020,10 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private boolean canReplace(Block block) {
         Material type = block.getType();
         if (type.isAir() || type == Material.WATER || type == Material.LAVA
-                || type == Material.FIRE || type == Material.SOUL_FIRE) return true;
-        if (!getConfig().getBoolean("settings.replace-thin-blocks", true)) return false;
+                || type == Material.FIRE || type == Material.SOUL_FIRE)
+            return true;
+        if (!getConfig().getBoolean("settings.replace-thin-blocks", true))
+            return false;
         return isThinReplaceable(type);
     }
 
@@ -900,39 +1034,65 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
      */
     private boolean isThinReplaceable(Material type) {
         String name = type.name();
-        if (name.endsWith("_CARPET") || name.endsWith("_SAPLING")
-                || name.endsWith("_TULIP") || name.endsWith("_FLOWER")
-                || name.endsWith("_MUSHROOM") || name.endsWith("_FUNGUS")
-                || name.endsWith("_ROOTS") || name.endsWith("_VINES")
-                || name.endsWith("_VINES_PLANT")) return true;
 
+        String[] thinReplaceableSuffixes = {
+                "_CARPET",
+                "_SAPLING",
+                "_TULIP",
+                "_FLOWER",
+                "_MUSHROOM",
+                "_FUNGUS",
+                "_ROOTS",
+                "_VINES",
+                "_VINES_PLANT",
+        };
+
+        for (String suffix : thinReplaceableSuffixes) {
+            if (name.endsWith(suffix)) {
+                return true;
+            }
+        }
         return THIN_REPLACEABLE_MATERIALS.contains(name);
     }
 
-    /** Devuelve el ID registrado para una ubicación, aunque otro plugin haya cambiado el bloque. */
+    /**
+     * Devuelve el ID registrado para una ubicación, aunque otro plugin haya
+     * cambiado el bloque.
+     */
     private UUID trackedGraveId(Block block) {
         BlockKey key = new BlockKey(block.getWorld().getName(), block.getX(), block.getY(), block.getZ());
         UUID cached = gravesByBlock.get(key);
         return cached != null ? cached : physicalGraveId(block);
     }
 
-    /** Lee exclusivamente la cabeza física y su PDC; no confía en el caché de ubicación. */
+    /**
+     * Lee exclusivamente la cabeza física y su PDC; no confía en el caché de
+     * ubicación.
+     */
     private UUID physicalGraveId(Block block) {
-        if (!(block.getState() instanceof Skull skull)) return null;
+        if (!(block.getState() instanceof Skull skull))
+            return null;
         String raw = skull.getPersistentDataContainer().get(graveKey, PersistentDataType.STRING);
-        if (raw == null) return null;
-        try { return UUID.fromString(raw); } catch (IllegalArgumentException ignored) { return null; }
+        if (raw == null)
+            return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private boolean isOurHead(Block block, UUID id) {
         return id.equals(physicalGraveId(block));
     }
 
-
     private boolean canAccessGrave(Player player, GraveMeta meta) {
-        if (meta.ownerUuid().equals(player.getUniqueId()) || player.hasPermission("mdvgraves.admin")) return true;
-        if (getConfig().getBoolean("settings.only-owner-can-open", false)) return false;
-        if (!getConfig().getBoolean("utilities.private-graves.enabled", true)) return true;
+        if (meta.ownerUuid().equals(player.getUniqueId()) || player.hasPermission("mdvgraves.admin"))
+            return true;
+        if (getConfig().getBoolean("settings.only-owner-can-open", false))
+            return false;
+        if (!getConfig().getBoolean("utilities.private-graves.enabled", true))
+            return true;
 
         Player owner = Bukkit.getPlayer(meta.ownerUuid());
         boolean currentlyProtected = owner != null && owner.hasPermission("mdvgraves.private");
@@ -940,7 +1100,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private boolean enabledWorld(String world) {
-        return getConfig().getStringList("settings.enabled-worlds").stream().anyMatch(name -> name.equalsIgnoreCase(world));
+        return getConfig().getStringList("settings.enabled-worlds").stream()
+                .anyMatch(name -> name.equalsIgnoreCase(world));
     }
 
     private int inventorySize(int itemCount) {
@@ -958,31 +1119,30 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
                 rs.getLong("created_at"), opened, rs.getLong("expires_at"), rs.getInt("owner_protected") != 0);
     }
 
-    private void send(CommandSender sender, String path, Map<String, String> replacements) {
+    public void send(CommandSender sender, String path, Map<String, String> replacements) {
         String raw = getConfig().getString(path, "");
-        if (raw == null || raw.isBlank()) return;
+        if (raw == null || raw.isBlank())
+            return;
         String prefix = getConfig().getString("messages.prefix", "");
         String result = prefix + raw;
-        for (Map.Entry<String, String> entry : replacements.entrySet()) result = result.replace("{" + entry.getKey() + "}", entry.getValue());
+        for (Map.Entry<String, String> entry : replacements.entrySet())
+            result = result.replace("{" + entry.getKey() + "}", entry.getValue());
         sender.sendMessage(color(result));
     }
 
-    private String color(String text) {
+    public String color(String text) {
         return ChatColor.translateAlternateColorCodes('&', text == null ? "" : text);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onBackGraveAlias(PlayerCommandPreprocessEvent event) {
-        if (!getConfig().getBoolean("utilities.back-grave.intercept-back-grave", true)) return;
-        String message = event.getMessage().trim();
-        if (!message.matches("(?i)^/back\\s+(grave|graves|bolsa)$")) return;
-        event.setCancelled(true);
-        executeGraveBack(event.getPlayer());
-    }
-
-    private boolean executeGraveBack(Player player) {
+    public boolean executeGraveBack(Player player) {
         attemptGraveBack(player, false, false, false, true);
         return true;
+    }
+
+    public boolean executeGraveBack(Player player, boolean bypassEnabled, boolean bypassPermission,
+            boolean bypassCooldown, boolean sendMessages) {
+        return attemptGraveBack(player, bypassEnabled, bypassPermission, bypassCooldown,
+                sendMessages) == GraveBackResult.SUCCESS;
     }
 
     /**
@@ -994,13 +1154,15 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
      * @param sendMessages     usa los mensajes normales de /graveback
      */
     private GraveBackResult attemptGraveBack(Player player, boolean bypassEnabled, boolean bypassPermission,
-                                             boolean bypassCooldown, boolean sendMessages) {
+            boolean bypassCooldown, boolean sendMessages) {
         if (!bypassEnabled && !getConfig().getBoolean("utilities.back-grave.enabled", true)) {
-            if (sendMessages) send(player, "messages.back-disabled", Map.of());
+            if (sendMessages)
+                send(player, "messages.back-disabled", Map.of());
             return GraveBackResult.DISABLED;
         }
         if (!bypassPermission && !player.hasPermission("mdvgraves.back")) {
-            if (sendMessages) send(player, "messages.no-permission", Map.of());
+            if (sendMessages)
+                send(player, "messages.no-permission", Map.of());
             return GraveBackResult.NO_PERMISSION;
         }
 
@@ -1010,20 +1172,23 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             long availableAt = graveBackCooldowns.getOrDefault(player.getUniqueId(), 0L);
             if (availableAt > now) {
                 long remaining = Math.max(1L, (availableAt - now + 999L) / 1000L);
-                if (sendMessages) send(player, "messages.back-cooldown", Map.of("seconds", Long.toString(remaining)));
+                if (sendMessages)
+                    send(player, "messages.back-cooldown", Map.of("seconds", Long.toString(remaining)));
                 return GraveBackResult.COOLDOWN;
             }
         }
 
         GraveMeta latest = latestGrave(player.getUniqueId());
         if (latest == null) {
-            if (sendMessages) send(player, "messages.back-no-graves", Map.of());
+            if (sendMessages)
+                send(player, "messages.back-no-graves", Map.of());
             return GraveBackResult.NO_GRAVES;
         }
 
         World world = Bukkit.getWorld(latest.world());
         if (world == null) {
-            if (sendMessages) send(player, "messages.back-world-unavailable", Map.of("world", latest.world()));
+            if (sendMessages)
+                send(player, "messages.back-world-unavailable", Map.of("world", latest.world()));
             return GraveBackResult.WORLD_UNAVAILABLE;
         }
 
@@ -1031,16 +1196,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         int radius = Math.max(0, getConfig().getInt("utilities.back-grave.safe-search-radius", 3));
         Location destination = findSafeTeleportLocation(latest, world, radius, player.getLocation());
         if (destination == null) {
-            if (sendMessages) send(player, "messages.back-no-safe-location", Map.of(
-                    "world", latest.world(),
-                    "x", Integer.toString(latest.x()),
-                    "y", Integer.toString(latest.y()),
-                    "z", Integer.toString(latest.z())));
+            if (sendMessages)
+                send(player, "messages.back-no-safe-location", Map.of(
+                        "world", latest.world(),
+                        "x", Integer.toString(latest.x()),
+                        "y", Integer.toString(latest.y()),
+                        "z", Integer.toString(latest.z())));
             return GraveBackResult.NO_SAFE_LOCATION;
         }
 
         if (!player.teleport(destination, PlayerTeleportEvent.TeleportCause.COMMAND)) {
-            if (sendMessages) send(player, "messages.back-teleport-failed", Map.of());
+            if (sendMessages)
+                send(player, "messages.back-teleport-failed", Map.of());
             return GraveBackResult.TELEPORT_FAILED;
         }
 
@@ -1082,7 +1249,7 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
      * una acción del CONSUMABLE de MMOItems. La fruta NO debe autoconsumirse en MI:
      * MDVGraves quita exactamente una unidad solo después de un teleport exitoso.
      */
-    private boolean executeDeathFruit(CommandSender sender, String[] args) {
+    public boolean executeDeathFruit(CommandSender sender, String[] args) {
         if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)) {
             send(sender, "messages.death-fruit-console-only", Map.of());
             return true;
@@ -1091,7 +1258,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             sender.sendMessage(color("&cUso: /mdvgraves deathfruit <jugador>"));
             return true;
         }
-        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return true;
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true))
+            return true;
 
         Player player = Bukkit.getPlayerExact(args[1]);
         if (player == null) {
@@ -1102,8 +1270,10 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         long now = System.currentTimeMillis();
         long lockMs = Math.max(0L, getConfig().getLong("utilities.death-fruit.use-lock-ms", 750L));
         long lockedUntil = deathFruitUseLocks.getOrDefault(player.getUniqueId(), 0L);
-        if (lockedUntil > now) return true;
-        if (lockMs > 0L) deathFruitUseLocks.put(player.getUniqueId(), now + lockMs);
+        if (lockedUntil > now)
+            return true;
+        if (lockMs > 0L)
+            deathFruitUseLocks.put(player.getUniqueId(), now + lockMs);
 
         PendingDeathFruitUse pending = resolveDeathFruitUse(player, now);
         if (pending == null) {
@@ -1116,7 +1286,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         if (result != GraveBackResult.SUCCESS) {
             // Seguridad extra: si la versión/config de MMOItems descontó el consumible
             // antes de ejecutar el comando, se devuelve exactamente 1 unidad al fallar.
-            if (alreadyConsumedByMmoItems) refundDeathFruit(player, pending.snapshot());
+            if (alreadyConsumedByMmoItems)
+                refundDeathFruit(player, pending.snapshot());
             sendDeathFruitFailure(player, result);
             return true;
         }
@@ -1143,8 +1314,10 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             }
             case NO_SAFE_LOCATION -> {
                 GraveMeta latest = latestGrave(player.getUniqueId());
-                if (latest == null) send(player, "messages.death-fruit-no-graves", Map.of());
-                else send(player, "messages.back-no-safe-location", graveLocationPlaceholders(latest));
+                if (latest == null)
+                    send(player, "messages.death-fruit-no-graves", Map.of());
+                else
+                    send(player, "messages.back-no-safe-location", graveLocationPlaceholders(latest));
             }
             case TELEPORT_FAILED -> send(player, "messages.back-teleport-failed", Map.of());
             default -> send(player, "messages.death-fruit-failed", Map.of());
@@ -1159,7 +1332,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         }
 
         EquipmentSlot hand = findDeathFruitHand(player);
-        if (hand == null) return null;
+        if (hand == null)
+            return null;
         ItemStack stack = hand == EquipmentSlot.OFF_HAND
                 ? player.getInventory().getItemInOffHand()
                 : player.getInventory().getItemInMainHand();
@@ -1170,7 +1344,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         ItemStack current = pending.hand() == EquipmentSlot.OFF_HAND
                 ? player.getInventory().getItemInOffHand()
                 : player.getInventory().getItemInMainHand();
-        if (!isConfiguredDeathFruit(current)) return true;
+        if (!isConfiguredDeathFruit(current))
+            return true;
         return current.getAmount() < pending.originalAmount();
     }
 
@@ -1186,8 +1361,10 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private EquipmentSlot findDeathFruitHand(Player player) {
-        if (isConfiguredDeathFruit(player.getInventory().getItemInMainHand())) return EquipmentSlot.HAND;
-        if (isConfiguredDeathFruit(player.getInventory().getItemInOffHand())) return EquipmentSlot.OFF_HAND;
+        if (isConfiguredDeathFruit(player.getInventory().getItemInMainHand()))
+            return EquipmentSlot.HAND;
+        if (isConfiguredDeathFruit(player.getInventory().getItemInOffHand()))
+            return EquipmentSlot.OFF_HAND;
         return null;
     }
 
@@ -1195,10 +1372,13 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         ItemStack stack = hand == EquipmentSlot.OFF_HAND
                 ? player.getInventory().getItemInOffHand()
                 : player.getInventory().getItemInMainHand();
-        if (!isConfiguredDeathFruit(stack)) return false;
+        if (!isConfiguredDeathFruit(stack))
+            return false;
         if (stack.getAmount() <= 1) {
-            if (hand == EquipmentSlot.OFF_HAND) player.getInventory().setItemInOffHand(null);
-            else player.getInventory().setItemInMainHand(null);
+            if (hand == EquipmentSlot.OFF_HAND)
+                player.getInventory().setItemInOffHand(null);
+            else
+                player.getInventory().setItemInMainHand(null);
         } else {
             stack.setAmount(stack.getAmount() - 1);
         }
@@ -1210,11 +1390,14 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         mmoItemsBridgeWarningLogged = false;
         nbtItemGetMethod = null;
         nbtItemGetStringMethod = null;
-        deathFruitExpectedType = Optional.ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-type", "CONSUMABLE"))
+        deathFruitExpectedType = Optional
+                .ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-type", "CONSUMABLE"))
                 .orElse("CONSUMABLE");
-        deathFruitExpectedId = Optional.ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-id", "FRUTA_DE_LA_MUERTE"))
+        deathFruitExpectedId = Optional
+                .ofNullable(getConfig().getString("utilities.death-fruit.mmoitems-id", "FRUTA_DE_LA_MUERTE"))
                 .orElse("FRUTA_DE_LA_MUERTE");
-        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true)) return;
+        if (!getConfig().getBoolean("utilities.death-fruit.enabled", true))
+            return;
         if (Bukkit.getPluginManager().getPlugin("MMOItems") == null
                 || Bukkit.getPluginManager().getPlugin("MythicLib") == null) {
             getLogger().warning("Fruta de la Muerte activada, pero MMOItems/MythicLib no están disponibles.");
@@ -1226,12 +1409,14 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
             nbtItemGetStringMethod = nbtItemClass.getMethod("getString", String.class);
             mmoItemsBridgeReady = true;
         } catch (ReflectiveOperationException ex) {
-            getLogger().log(Level.WARNING, "No se pudo inicializar el puente MMOItems/MythicLib para la Fruta de la Muerte.", ex);
+            getLogger().log(Level.WARNING,
+                    "No se pudo inicializar el puente MMOItems/MythicLib para la Fruta de la Muerte.", ex);
         }
     }
 
     private boolean isConfiguredDeathFruit(ItemStack stack) {
-        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta() || !mmoItemsBridgeReady) return false;
+        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta() || !mmoItemsBridgeReady)
+            return false;
         try {
             Object nbt = nbtItemGetMethod.invoke(null, stack);
             String type = String.valueOf(nbtItemGetStringMethod.invoke(nbt, "MMOITEMS_ITEM_TYPE"));
@@ -1255,7 +1440,8 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         for (int r = 0; r <= radius; r++) {
             for (int dx = -r; dx <= r; dx++) {
                 for (int dz = -r; dz <= r; dz++) {
-                    if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r) continue;
+                    if (r > 0 && Math.abs(dx) != r && Math.abs(dz) != r)
+                        continue;
                     for (int dy = 0; dy <= 3; dy++) {
                         int x = baseX + dx;
                         int y = baseY + dy;
@@ -1279,154 +1465,19 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     }
 
     private boolean isSafeStandingSpot(World world, int x, int y, int z, UUID graveId) {
-        if (y <= world.getMinHeight() || y + 1 >= world.getMaxHeight()) return false;
+        if (y <= world.getMinHeight() || y + 1 >= world.getMaxHeight())
+            return false;
         Block feet = world.getBlockAt(x, y, z);
         Block head = world.getBlockAt(x, y + 1, z);
         Block floor = world.getBlockAt(x, y - 1, z);
-        if (!feet.isPassable() || !head.isPassable()) return false;
+        if (!feet.isPassable() || !head.isPassable())
+            return false;
         return floor.getType().isSolid() || graveId.equals(trackedGraveId(floor));
     }
 
-    @Override
-    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (command.getName().equalsIgnoreCase("graveback")) {
-            if (args.length >= 1) {
-                if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)
-                        && !sender.hasPermission("mdvgraves.back.others")
-                        && !sender.hasPermission("mdvgraves.admin")) {
-                    send(sender, "messages.no-permission", Map.of());
-                    return true;
-                }
-                Player target = Bukkit.getPlayerExact(args[0]);
-                if (target == null) {
-                    send(sender, "messages.player-not-found", Map.of("player", args[0]));
-                    return true;
-                }
-                GraveBackResult result = attemptGraveBack(target, true, true, true, true);
-                if (result == GraveBackResult.SUCCESS) {
-                    send(sender, "messages.back-other-success", Map.of("player", target.getName()));
-                } else {
-                    send(sender, "messages.back-other-failed", Map.of("player", target.getName()));
-                }
-                return true;
-            }
-            if (!(sender instanceof Player player)) {
-                sender.sendMessage(color("&cUso desde consola: /graveback <jugador>"));
-                return true;
-            }
-            return executeGraveBack(player);
-        }
-
-        if (args.length > 0 && (args[0].equalsIgnoreCase("deathfruit")
-                || args[0].equalsIgnoreCase("fruta")
-                || args[0].equalsIgnoreCase("frutamuerte"))) {
-            return executeDeathFruit(sender, args);
-        }
-
-        if (args.length > 0 && (args[0].equalsIgnoreCase("back")
-                || args[0].equalsIgnoreCase("volver") || args[0].equalsIgnoreCase("regresar"))) {
-            if (args.length >= 2) {
-                if (!(sender instanceof org.bukkit.command.ConsoleCommandSender)
-                        && !sender.hasPermission("mdvgraves.back.others")
-                        && !sender.hasPermission("mdvgraves.admin")) {
-                    send(sender, "messages.no-permission", Map.of());
-                    return true;
-                }
-                Player target = Bukkit.getPlayerExact(args[1]);
-                if (target == null) {
-                    send(sender, "messages.player-not-found", Map.of("player", args[1]));
-                    return true;
-                }
-                GraveBackResult result = attemptGraveBack(target, true, true, true, true);
-                if (result == GraveBackResult.SUCCESS) {
-                    send(sender, "messages.back-other-success", Map.of("player", target.getName()));
-                } else {
-                    send(sender, "messages.back-other-failed", Map.of("player", target.getName()));
-                }
-                return true;
-            }
-            if (!(sender instanceof Player player)) {
-                sender.sendMessage(color("&cUso: /mdvgraves back <jugador>"));
-                return true;
-            }
-            return executeGraveBack(player);
-        }
-
-        if (!sender.hasPermission("mdvgraves.admin")) {
-            send(sender, "messages.no-permission", Map.of());
-            return true;
-        }
-        if (args.length == 0 || args[0].equalsIgnoreCase("info")) {
-            sender.sendMessage(color("&6MDVGraves &f1.0.8 &7| Bolsas activas: &e" + graves.size()));
-            return true;
-        }
-        if (args[0].equalsIgnoreCase("reload")) {
-            reloadConfig();
-            setupMmoItemsBridge();
-            scheduleCleanup();
-            scheduleOpenGraveIntegrityGuard();
-            send(sender, "messages.reload", Map.of());
-            return true;
-        }
-        if (args[0].equalsIgnoreCase("cleanup")) {
-            int count = cleanupExpired(true);
-            send(sender, "messages.cleanup", Map.of("count", Integer.toString(count)));
-            return true;
-        }
-        if (args[0].equalsIgnoreCase("deleteall") || args[0].equalsIgnoreCase("purge")
-                || args[0].equalsIgnoreCase("eliminartodas")) {
-            if (args.length < 2 || !(args[1].equalsIgnoreCase("confirm") || args[1].equalsIgnoreCase("confirmar"))) {
-                send(sender, "messages.delete-all-confirm", Map.of("count", Integer.toString(graves.size())));
-                return true;
-            }
-            try {
-                int count = deleteAllGraves();
-                send(sender, "messages.delete-all-done", Map.of("count", Integer.toString(count)));
-            } catch (Exception ex) {
-                getLogger().log(Level.SEVERE, "No se pudieron eliminar todas las bolsas.", ex);
-                send(sender, "messages.delete-all-error", Map.of());
-            }
-            return true;
-        }
-        return false;
-    }
-
-    @Override
-    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (command.getName().equalsIgnoreCase("graveback")) {
-            if (args.length == 1 && (sender instanceof org.bukkit.command.ConsoleCommandSender
-                    || sender.hasPermission("mdvgraves.back.others") || sender.hasPermission("mdvgraves.admin"))) {
-                String prefix = args[0].toLowerCase(Locale.ROOT);
-                return Bukkit.getOnlinePlayers().stream().map(Player::getName)
-                        .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
-            }
-            return List.of();
-        }
-
-        if (args.length == 2 && (args[0].equalsIgnoreCase("back")
-                || args[0].equalsIgnoreCase("volver") || args[0].equalsIgnoreCase("regresar"))
-                && (sender instanceof org.bukkit.command.ConsoleCommandSender
-                || sender.hasPermission("mdvgraves.back.others") || sender.hasPermission("mdvgraves.admin"))) {
-            String prefix = args[1].toLowerCase(Locale.ROOT);
-            return Bukkit.getOnlinePlayers().stream().map(Player::getName)
-                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
-        }
-
-        if (args.length != 1) return List.of();
-        List<String> options = new ArrayList<>();
-        if (sender.hasPermission("mdvgraves.back")) options.add("back");
-        if (sender.hasPermission("mdvgraves.admin")) {
-            options.add("info");
-            options.add("reload");
-            options.add("cleanup");
-            options.add("deleteall");
-        }
-        String prefix = args[0].toLowerCase(Locale.ROOT);
-        return options.stream().filter(option -> option.startsWith(prefix)).toList();
-    }
-
-    private int deleteAllGraves() throws SQLException {
-        // Cierra primero cualquier bolsa abierta. InventoryCloseEvent persiste su estado
+    public int deleteAllGraves() throws SQLException {
+        // Cierra primero cualquier bolsa abierta. InventoryCloseEvent persiste su
+        // estado
         // antes del borrado global, evitando carreras o inventarios visuales obsoletos.
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (player.getOpenInventory().getTopInventory().getHolder() instanceof GraveHolder) {
@@ -1447,13 +1498,17 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         openGraveInventories.clear();
         forcedClosingGraves.clear();
 
-        // Solo toca bloques en chunks ya cargados. Los chunks descargados no se fuerzan;
-        // sus cabezas huérfanas serán retiradas por ChunkLoadEvent cuando vuelvan a cargar.
+        // Solo toca bloques en chunks ya cargados. Los chunks descargados no se
+        // fuerzan;
+        // sus cabezas huérfanas serán retiradas por ChunkLoadEvent cuando vuelvan a
+        // cargar.
         for (GraveMeta meta : snapshot) {
             World world = Bukkit.getWorld(meta.world());
-            if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4)) continue;
+            if (world == null || !world.isChunkLoaded(meta.x() >> 4, meta.z() >> 4))
+                continue;
             Block block = world.getBlockAt(meta.x(), meta.y(), meta.z());
-            if (isOurHead(block, meta.id())) block.setType(Material.AIR, false);
+            if (isOurHead(block, meta.id()))
+                block.setType(Material.AIR, false);
         }
         return deleted;
     }
@@ -1469,15 +1524,21 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
         TELEPORT_FAILED
     }
 
-    private record SupportPatch(Block block, BlockData original) { }
+    private record SupportPatch(Block block, BlockData original) {
+    }
 
-    private record PendingDeathFruitUse(EquipmentSlot hand, ItemStack snapshot, int originalAmount, long createdAt) { }
+    private record PendingDeathFruitUse(EquipmentSlot hand, ItemStack snapshot, int originalAmount, long createdAt) {
+    }
 
-    private record BlockKey(String world, int x, int y, int z) { }
+    private record BlockKey(String world, int x, int y, int z) {
+    }
 
     private record GraveMeta(UUID id, UUID ownerUuid, String ownerName, String world, int x, int y, int z,
-                             long createdAt, Long firstOpenedAt, long expiresAt, boolean ownerProtected) {
-        BlockKey blockKey() { return new BlockKey(world, x, y, z); }
+            long createdAt, Long firstOpenedAt, long expiresAt, boolean ownerProtected) {
+        BlockKey blockKey() {
+            return new BlockKey(world, x, y, z);
+        }
+
         GraveMeta withOpened(long opened, long expires) {
             return new GraveMeta(id, ownerUuid, ownerName, world, x, y, z, createdAt, opened, expires, ownerProtected);
         }
@@ -1486,8 +1547,18 @@ public final class MDVGravesPlugin extends JavaPlugin implements Listener {
     private static final class GraveHolder implements InventoryHolder {
         private final UUID graveId;
         private Inventory inventory;
-        private GraveHolder(UUID graveId) { this.graveId = graveId; }
-        UUID graveId() { return graveId; }
-        @Override public Inventory getInventory() { return inventory; }
+
+        private GraveHolder(UUID graveId) {
+            this.graveId = graveId;
+        }
+
+        UUID graveId() {
+            return graveId;
+        }
+
+        @Override
+        public Inventory getInventory() {
+            return inventory;
+        }
     }
 }
